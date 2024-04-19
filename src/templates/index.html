@@ -22,32 +22,7 @@
     <footer>
         <p>Emergence since 2024</p>
     </footer>
-    <script>
-         function submitForm(event) {
-            event.preventDefault(); // Empêche le formulaire de se soumettre normalement
-            
-            const searchQuery = document.getElementById("searchQuery").value;
-            const url = "/search"; // URL de l'endpoint de recherche sur le serveur
-            
-            fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ search_query: searchQuery })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Traitez la réponse du serveur ici
-                console.log(data);
-            })
-            .catch(error => {
-                console.error("Error:", error);
-            });
-        }
-        document.getElementById("searchForm").addEventListener("submit", submitForm);
-
-    </script>
+    <script type="text/javascript" src="/static/emergence.js"></script>
 </body>
 </html>
 

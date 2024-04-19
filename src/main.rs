@@ -1,24 +1,36 @@
 use actix_files::Files;
-use actix_web::{App, web, Responder, HttpResponse, HttpServer};
-use serde::Deserialize;
+use actix_web::{App, web, Error, Responder, HttpRequest, HttpResponse, HttpServer};
+use actix::{Actor, StreamHandler};
+use actix_web_actors::ws;
 use reqwest;
 use textwrap::wrap;
 use std::env;
 use embryo::EmbryoList;
 
-#[derive(Deserialize)]
-struct FormData {
-    search_query: String,
+#[derive(Clone)]
+struct EmquestWS;
+
+impl Actor for EmquestWS {
+    type Context = ws::WebsocketContext<Self>;
 }
 
-async fn index() -> impl Responder {
-    let html = include_str!("templates/index.html");
-    actix_web::HttpResponse::Ok().body(html)
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for EmquestWS {
+    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
+        match msg {
+            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
+            Ok(ws::Message::Text(query)) => {
+                if !query.trim().is_empty() {
+                    tokio::spawn(Self::handle_text_message(query.trim().to_string()));
+                }
+            },
+            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
+            _ => (),
+        }
+    }
 }
 
-async fn search(form: web::Json<FormData>) -> HttpResponse {
-    let query = &form.search_query;
-    if !query.trim().is_empty() {
+impl EmquestWS {
+    async fn handle_text_message(query: String) {
         let embox_url = match env::var("embox_url") {
             Ok(url) => url,
             Err(_) => {
@@ -44,14 +56,23 @@ async fn search(form: web::Json<FormData>) -> HttpResponse {
                     eprintln!("Failed to send HTTP request to {} : \n\t{}", server_url, err);
                 }
             };
-    }
 
-    HttpResponse::Ok().into()
+    }
+}
+
+async fn ws_index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+    let ws = EmquestWS;
+    ws::start(ws, &req, stream)
+}
+
+async fn index() -> impl Responder {
+    let html = include_str!("templates/index.html");
+    HttpResponse::Ok().body(html)
 }
 
 #[actix_web::post("/embox")]
 async fn embox(json: web::Json<serde_json::Value>) -> impl Responder {
-    let filter_response: Result<EmbryoList, _> = serde_json::from_str(json.to_string().as_str());
+    let filter_response: Result<EmbryoList, _> = serde_json::from_value(json.into_inner());
 
     match filter_response {
         Ok(filter_response) => {
@@ -61,12 +82,12 @@ async fn embox(json: web::Json<serde_json::Value>) -> impl Responder {
                 for (name, value) in &embryo.properties {
                     match name.as_str() {
                         "url"  => {
-                            url=value.clone();
+                            url = value.clone();
                         },
                         "resume" => {
-                            resume=value.clone();
+                            resume = value.clone();
                         }
-                        _ => { }
+                        _ => {}
                     }
                 }
                 let term_width = match term_size::dimensions() {
@@ -83,18 +104,19 @@ async fn embox(json: web::Json<serde_json::Value>) -> impl Responder {
             }
         }
         Err(_) => {
-            let uri = json.to_string().trim_matches('"').to_owned();
-            println!("{}", uri);
+            println!("Error embox");
         }
     }
-    HttpResponse::Ok().body("Embox OK")
+
+    HttpResponse::Ok().finish()
 }
 
 async fn start_server(embox_port: String) {
-    let server = HttpServer::new(|| {
-        App::new().service(embox)
+    let server = HttpServer::new(move || {
+        App::new()
+            .service(embox)
             .route("/", web::get().to(index))
-            .route("/search", web::post().to(search))
+            .route("/ws/", web::get().to(ws_index))
             .service(Files::new("/static", "src/static").prefer_utf8(true))
     })
     .bind(format!("0.0.0.0:{}", embox_port))
@@ -105,18 +127,12 @@ async fn start_server(embox_port: String) {
 
 #[tokio::main]
 async fn main() {
-
-    let embox_port = match env::var("embox_port") {
-        Ok(url) => url,
-        Err(_) => {
-            let config_map = embryo::read_emergence_conf().unwrap_or_default();
-            match config_map.get("embox").and_then(|em_disco| em_disco.get("port")) {
-                Some(port) => port.clone(),
-                None => "8079".to_string(),
-            }
-        },
-    };
-    
+    let embox_port = env::var("embox_port").unwrap_or_else(|_| {
+        let config_map = embryo::read_emergence_conf().unwrap_or_default();
+        config_map.get("embox")
+            .and_then(|em_disco| em_disco.get("port"))
+            .map_or("8079".to_string(), |port| port.clone())
+    });
 
     println!("Emergence Client V0.1.0");
     start_server(embox_port).await;
