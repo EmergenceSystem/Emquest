@@ -1,0 +1,67 @@
+html, body {
+    background: darkslategray;
+    height: 100%;
+    margin: 0;
+}
+
+h1 {
+    color: white;
+    text-align:left;
+    display:inline;
+}
+
+footer {
+    text-align: center;
+    padding: 20px 0;
+}
+
+footer p {
+    border-top : 1px solid white;
+    padding-top: 10px;
+    font-style: italic;
+    color: sandybrown;
+    font-size: 1em;
+}
+
+.container {
+    min-height: calc(100% - 110px);
+}
+
+.inline {
+    display: inline;
+}
+
+.search_input {
+    font-size: 2em;
+    width: calc(70% - 120px);
+    margin-left: 20px;
+    padding-left: 15px;
+    border-radius : 30px 20px 30px 10px;
+}
+
+.search_button {
+    width: 42px; 
+    height: 42px;
+    border: none;
+    cursor: pointer;
+    padding:0;
+    color: white;
+    margin-left: 10px;
+    background-color: transparent;
+    transition: all 0.2s ease-out;
+}
+
+.search_button svg {
+    vertical-align: bottom;
+    fill: white;
+    transition: fill 0.3s ease;
+}
+
+.search_button:hover {
+    transform: rotate(20deg);
+}
+
+.search_button:hover svg {
+    fill: sandybrown;
+}
+
