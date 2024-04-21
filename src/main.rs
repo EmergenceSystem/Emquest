@@ -1,68 +1,58 @@
 use actix_files::Files;
-use actix_web::{App, web, Error, Responder, HttpRequest, HttpResponse, HttpServer};
-use actix::{Actor, StreamHandler};
-use actix_web_actors::ws;
+use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use reqwest;
-use textwrap::wrap;
+use serde_json::Value;
 use std::env;
 use embryo::EmbryoList;
 
-#[derive(Clone)]
-struct EmquestWS;
+#[actix_web::post("/query")]
+async fn query(json: web::Json<Value>) -> Result<HttpResponse, Error> {
+    let server_url = embryo::get_em_disco_url();
+    let client = reqwest::Client::new();
+    let query = match json.to_string().parse::<Value>() {
+        Ok(parsed_json) => match parsed_json.get("query").and_then(|q| q.as_str()) {
+            Some(q) => q.to_owned(),
+            None => {
+                return Ok(HttpResponse::BadRequest().finish());
+            }
+        },
+        Err(_) => {
+            return Ok(HttpResponse::BadRequest().finish());
+        }
+    };
 
-impl Actor for EmquestWS {
-    type Context = ws::WebsocketContext<Self>;
-}
+    let response = client
+        .post(&format!("{}/query", server_url))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(query)
+        .send()
+        .await;
 
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for EmquestWS {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Text(query)) => {
-                if !query.trim().is_empty() {
-                    tokio::spawn(Self::handle_text_message(query.trim().to_string()));
-                }
-            },
-            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            _ => (),
+    match response {
+        Ok(res) => {
+            let body = res.text().await.unwrap_or_else(|_| String::new());
+            Ok(HttpResponse::Ok().body(body))
+        }
+        Err(_) => {
+            Ok(HttpResponse::Ok().finish())
         }
     }
 }
 
-impl EmquestWS {
-    async fn handle_text_message(query: String) {
-        let embox_url = match env::var("embox_url") {
-            Ok(url) => url,
-            Err(_) => {
-                let config_map = embryo::read_emergence_conf().unwrap_or_default();
-                match config_map.get("embox").and_then(|em_disco| em_disco.get("url")) {
-                    Some(url) => url.clone(),
-                    None => "http://localhost:8079/embox".to_string(),
-                }
-            },
-        };
+async fn start_server(embox_port: String) {
+    let server = HttpServer::new(move || {
+        App::new()
+            .service(query)
+            .route("/", web::get().to(index))
+            .service(Files::new("/static", "src/static").prefer_utf8(true))
+    })
+    .bind(format!("0.0.0.0:{}", embox_port))
+        .expect("Failed to bind address")
+        .run();
 
-        let json = format!("{{\"embox_url\": \"{}\", \"query\" : \"{}\"}}", embox_url, query.trim_end().to_string());
-        let server_url = embryo::get_em_disco_url();
-        let client = reqwest::Client::new();
-        let _ = match client
-            .post(&format!("{}/query", server_url))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(json)
-            .send()
-            .await {
-                Ok(_) => (),
-                Err(err) => {
-                    eprintln!("Failed to send HTTP request to {} : \n\t{}", server_url, err);
-                }
-            };
-
+    if let Err(err) = server.await {
+        eprintln!("Server failed: {:?}", err);
     }
-}
-
-async fn ws_index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let ws = EmquestWS;
-    ws::start(ws, &req, stream)
 }
 
 async fn index() -> impl Responder {
@@ -70,66 +60,12 @@ async fn index() -> impl Responder {
     HttpResponse::Ok().body(html)
 }
 
-#[actix_web::post("/embox")]
-async fn embox(json: web::Json<serde_json::Value>) -> impl Responder {
-    let filter_response: Result<EmbryoList, _> = serde_json::from_value(json.into_inner());
-
-    match filter_response {
-        Ok(filter_response) => {
-            for embryo in filter_response.embryo_list {
-                let mut url = String::new();
-                let mut resume = String::new();
-                for (name, value) in &embryo.properties {
-                    match name.as_str() {
-                        "url"  => {
-                            url = value.clone();
-                        },
-                        "resume" => {
-                            resume = value.clone();
-                        }
-                        _ => {}
-                    }
-                }
-                let term_width = match term_size::dimensions() {
-                    Some((w, _)) => w as usize - 10,
-                    None => 80,
-                };
-
-                let wrapped_resume = wrap(&resume, term_width - 1)
-                    .iter()
-                    .map(|line| format!("\t{}", line))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                println!("{}\n{}", url, wrapped_resume);
-            }
-        }
-        Err(_) => {
-            println!("Error embox");
-        }
-    }
-
-    HttpResponse::Ok().finish()
-}
-
-async fn start_server(embox_port: String) {
-    let server = HttpServer::new(move || {
-        App::new()
-            .service(embox)
-            .route("/", web::get().to(index))
-            .route("/ws/", web::get().to(ws_index))
-            .service(Files::new("/static", "src/static").prefer_utf8(true))
-    })
-    .bind(format!("0.0.0.0:{}", embox_port))
-        .expect("Failed to bind address")
-        .run();
-    server.await.expect("Server failed");
-}
-
 #[tokio::main]
 async fn main() {
     let embox_port = env::var("embox_port").unwrap_or_else(|_| {
         let config_map = embryo::read_emergence_conf().unwrap_or_default();
-        config_map.get("embox")
+        config_map
+            .get("embox")
             .and_then(|em_disco| em_disco.get("port"))
             .map_or("8079".to_string(), |port| port.clone())
     });
