@@ -3,7 +3,6 @@ use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use reqwest;
 use serde_json::Value;
 use std::env;
-use embryo::EmbryoList;
 
 #[actix_web::post("/query")]
 async fn query(json: web::Json<Value>) -> Result<HttpResponse, Error> {
