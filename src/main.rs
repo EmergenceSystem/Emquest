@@ -20,23 +20,26 @@ async fn query(json: web::Json<Value>) -> Result<HttpResponse, Error> {
         }
     };
 
-    let response = client
-        .post(&format!("{}/query", server_url))
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(query)
-        .send()
-        .await;
+    if !query.is_empty() {
+        let response = client
+            .post(&format!("{}/query", server_url))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(query)
+            .send()
+            .await;
 
-    match response {
-        Ok(res) => {
-            let body = res.text().await.unwrap_or_else(|_| String::new());
-            Ok(HttpResponse::Ok().body(body))
+        match response {
+            Ok(res) => {
+                let body = res.text().await.unwrap_or_else(|_| String::new());
+                Ok(HttpResponse::Ok().body(body))
+            }
+            Err(_) => {
+                Ok(HttpResponse::Ok().finish())
+            }
         }
-        Err(_) => {
-            Ok(HttpResponse::Ok().finish())
-        }
-    }
-}
+    } else {
+                Ok(HttpResponse::Ok().finish())
+    }   }
 
 async fn start_server(embox_port: String) {
     let server = HttpServer::new(move || {
