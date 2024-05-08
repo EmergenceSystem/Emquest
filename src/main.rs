@@ -39,7 +39,8 @@ async fn query(json: web::Json<Value>) -> Result<HttpResponse, Error> {
         }
     } else {
                 Ok(HttpResponse::Ok().finish())
-    }   }
+    }
+}
 
 async fn start_server(embox_port: String) {
     let server = HttpServer::new(move || {
