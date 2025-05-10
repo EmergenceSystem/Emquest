@@ -1,0 +1,18 @@
+{application, emquest, [
+    {description, "Client Emquest"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {emquest_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        cowboy,
+        jsx,
+        hackney,
+        embryo
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache 2.0"]},
+    {links, [{"GitHub", "https://github.com/EmergenceSystem/Emquest"}]}
+]}.
