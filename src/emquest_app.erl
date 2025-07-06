@@ -9,6 +9,7 @@ start(_StartType, _StartArgs) ->
         {'_', [
             {"/", emquest_handler, [index]},
             {"/query", emquest_handler, [query]},
+            {"/summarize", emquest_handler, [summarize]},
             {"/static/[...]", cowboy_static, {priv_dir, emquest, "static"}}
         ]}
     ]),

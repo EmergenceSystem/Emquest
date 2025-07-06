@@ -5,25 +5,113 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <form id="searchForm">
-            &nbsp;&nbsp;<h1>Emergence</h1>
-            <div class="inline">
-                <input type="text" id="searchQuery" class="search_input" name="search_query" placeholder="Search query">
-                <button type="submit" class="search_button">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--!Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free Copyright 2024 Fonticons, Inc.--><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg>
-                </button>
+    <div class="background-grid"></div>
+    <div class="background-particles"></div>
+    
+    <!-- Header tech -->
+    <header class="tech-header">
+        <div class="header-content">
+            <div class="logo-container">
+                <div class="logo-pulse"></div>
+                <h1 class="logo-text">EMERGENCE</h1>
+                <div class="logo-subtitle">NEURAL SEARCH SYSTEM</div>
             </div>
-        </form>
-        <br />
-        <div id="searchResults" class="search_results"></div>
+            <div class="system-status">
+                <div class="status-indicator active">
+                    <div class="status-dot"></div>
+                    <span>SYSTEM ONLINE</span>
+                </div>
+                <div class="timestamp" id="timestamp"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main container -->
+    <div class="container">
+        <div class="main-content">
+            <!-- Search interface -->
+            <div class="search-interface">
+                <div class="search-label">QUERY INPUT</div>
+                <form id="searchForm" class="search-form">
+                    <div class="search-wrapper">
+                        <input type="text" id="searchQuery" class="search-input" name="search_query" placeholder="Enter neural search query...">
+                        <button type="submit" class="search-button">
+                            <div class="button-glow"></div>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+                                <path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Results panel -->
+            <div class="results-panel">
+                <div class="panel-header">
+                    <h3>DATA STREAM</h3>
+                    <div class="panel-controls">
+                        <div class="control-dot red"></div>
+                        <div class="control-dot yellow"></div>
+                        <div class="control-dot green"></div>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <div id="searchResults" class="search-results"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Summary Panel -->
+        <div class="summary-panel">
+            <div class="panel-header">
+                <h3>AI ANALYSIS</h3>
+                <div class="ai-indicator">
+                    <div class="ai-pulse"></div>
+                    <span>NEURAL NET</span>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div id="summaryContent" class="summary-content">
+                    <div class="idle-state">
+                        <div class="idle-animation">
+                            <div class="neural-nodes">
+                                <div class="node"></div>
+                                <div class="node"></div>
+                                <div class="node"></div>
+                                <div class="node"></div>
+                                <div class="connection"></div>
+                                <div class="connection"></div>
+                                <div class="connection"></div>
+                            </div>
+                        </div>
+                        <p>AWAITING DATA INPUT FOR NEURAL ANALYSIS</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    <footer>
-        <p>Emergence since 2024</p>
+
+    <!-- Footer -->
+    <footer class="tech-footer">
+        <div class="footer-content">
+            <div class="footer-left">
+                <div class="system-info">
+                    <span>EMERGENCE v2.1.0</span>
+                    <span class="separator">|</span>
+                    <span>NEURAL CORE ACTIVE</span>
+                </div>
+            </div>
+            <div class="footer-right">
+                <span>EST. 2024</span>
+            </div>
+        </div>
     </footer>
+
     <script type="text/javascript" src="/static/emergence.js"></script>
 </body>
 </html>
-
