@@ -6,9 +6,8 @@
     {applications, [
         kernel,
         stdlib,
-        cowboy,
+        wade,
         jsx,
-        hackney,
         embryo
     ]},
     {env, []},
