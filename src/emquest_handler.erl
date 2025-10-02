@@ -26,47 +26,56 @@ handle_index(_Req) ->
 %% @doc Handle GET/POST /query requests and forward to port 8080.
 handle_query(Req) ->
     Method = wade:method(Req),
-    
+
     case Method of
         post ->
             ParsedBody = Req#req.body,
-            
-            case ParsedBody of
-                JsonData when is_map(JsonData) ->
-                    Query = maps:get(<<"query">>, JsonData, undefined),
-                    case Query of
-                        undefined ->
-                            ErrBody = jsx:encode(#{<<"error">> => <<"Missing 'query' key">>}),
-                            {400, ErrBody, [{"content-type", "application/json"}]};
-                        _ when is_binary(Query) ->
-                            ForwardBody = jsx:encode(JsonData),
-                            
-                            ForwardUrl = "http://localhost:8080/query",
-                            Headers = [{"content-type", "application/json"}],
-                            io:format("Forwarding query to ~p~n", [ForwardUrl]),
-                            
-                            case wade:request(post, ForwardUrl, Headers, ForwardBody) of
-                                {ok, _StatusCode, _RespHeaders, ResponseBody} ->
-                                    io:format("Received response from disco~n"),
-                                    {200, ResponseBody, [{"content-type", "application/json"}]};
-                                {error, Reason} ->
-                                    io:format("Forwarding to disco failed: ~p~n", [Reason]),
-                                    ErrBody = jsx:encode(#{<<"error">> => <<"Failed to forward request">>}),
-                                    {500, ErrBody, [{"content-type", "application/json"}]}
-                            end;
-                        _ ->
-                            ErrBody = jsx:encode(#{<<"error">> => <<"Invalid 'query' value">>}),
-                            {400, ErrBody, [{"content-type", "application/json"}]}
-                    end;
-                [] ->
-                    io:format("Empty or invalid body~n"),
-                    ErrBody = jsx:encode(#{<<"error">> => <<"Empty or invalid JSON body">>}),
+
+            %% Normaliser en map JSON-like
+            JsonMap =
+                case ParsedBody of
+                    %% Déjà un map (application/json brut)
+                    Map when is_map(Map) ->
+                        Map;
+                    %% Proplist [{Key, Val}, ...] -> convertir en map
+                    List when is_list(List), List =/= [] ->
+                        maps:from_list(
+                          [ 
+                            case K of
+                                A when is_atom(A) -> {atom_to_binary(A, utf8), list_to_binary(V)};
+                                B when is_binary(B) -> {B, list_to_binary(V)};
+                                _ -> {list_to_binary(io_lib:format("~p",[K])), list_to_binary(V)}
+                            end
+                          || {K,V} <- List ]
+                        );
+                    %% Vide ou non reconnu
+                    _ ->
+                        #{}
+                end,
+
+            case maps:get(<<"query">>, JsonMap, undefined) of
+                undefined ->
+                    ErrBody = jsx:encode(#{<<"error">> => <<"Missing 'query' key">>}),
                     {400, ErrBody, [{"content-type", "application/json"}]};
+                Query when is_binary(Query) ->
+                    ForwardBody = jsx:encode(JsonMap),
+                    ForwardUrl = "http://localhost:8080/query",
+                    Headers = [{"content-type", "application/json"}],
+                    io:format("Forwarding query to ~p~n", [ForwardUrl]),
+                    case wade:request(post, ForwardUrl, Headers, ForwardBody) of
+                        {ok, _StatusCode, _RespHeaders, ResponseBody} ->
+                            io:format("Received response from disco~n"),
+                            {200, ResponseBody, [{"content-type", "application/json"}]};
+                        {error, Reason} ->
+                            io:format("Forwarding to disco failed: ~p~n", [Reason]),
+                            ErrBody = jsx:encode(#{<<"error">> => <<"Failed to forward request">>}),
+                            {500, ErrBody, [{"content-type", "application/json"}]}
+                    end;
                 _ ->
-                    io:format("Unexpected body format: ~p~n", [ParsedBody]),
-                    ErrBody = jsx:encode(#{<<"error">> => <<"Invalid JSON body format">>}),
+                    ErrBody = jsx:encode(#{<<"error">> => <<"Invalid 'query' value">>}),
                     {400, ErrBody, [{"content-type", "application/json"}]}
             end;
+
         get ->
             io:format("GET request received~n"),
             ErrBody = jsx:encode(#{<<"error">> => <<"Use POST method for queries">>}),
