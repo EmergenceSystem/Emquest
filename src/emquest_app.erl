@@ -15,6 +15,7 @@ start(_StartType, _StartArgs) ->
         {'_', [
             {"/",           emquest_handler, index},
             {"/query",      emquest_handler, query},
+            {"/favicon.ico",  cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
             {"/static/[...]", cowboy_static,
                 {priv_dir, emquest, "static"}}
         ]}
