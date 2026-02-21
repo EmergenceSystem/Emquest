@@ -1,132 +1,92 @@
 %%%-------------------------------------------------------------------
-%%% @doc HTTP handler for Wade routes.
+%%% @doc HTTP handler for Cowboy routes.
+%%%
+%%% Each route passes an `action' atom as initial state:
+%%%   `index'     — serves index.html
+%%%   `query'     — forwards the query to em_disco on port 8080
+%%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_handler).
--export([
-    handle_index/1,
-    handle_query/1,
-    handle_summarize/1,
-    serve_static/1
-]).
+-behaviour(cowboy_handler).
 
-%% Include Wade's header to get the req record definition
--include_lib("wade/include/wade.hrl").
+-export([init/2]).
 
-%% @doc Serve the index.html template for the root route.
-handle_index(_Req) ->
+%%--------------------------------------------------------------------
+%% Cowboy entry point — dispatches on the action set by the router.
+%%--------------------------------------------------------------------
+
+init(Req0, index) ->
     TemplatePath = filename:join([code:priv_dir(emquest), "templates", "index.html"]),
-    case file:read_file(TemplatePath) of
-        {ok, BinContent} ->
-            {200, BinContent, [{"content-type", "text/html"}]};
+    {Code, Body, CT} = case file:read_file(TemplatePath) of
+        {ok, Bin} ->
+            {200, Bin, <<"text/html">>};
         {error, Reason} ->
-            io:format("Failed to read index.html: ~p~n", [Reason]),
-            {500, <<"Internal Server Error">>, [{"content-type", "text/plain"}]}
+            io:format("[emquest] Failed to read index.html: ~p~n", [Reason]),
+            {500, <<"Internal Server Error">>, <<"text/plain">>}
+    end,
+    Req = cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0),
+    {ok, Req, index};
+
+init(Req0, query) ->
+    case cowboy_req:method(Req0) of
+        <<"POST">> ->
+            {ok, RawBody, Req1} = cowboy_req:read_body(Req0),
+            Req = handle_query(RawBody, Req1),
+            {ok, Req, query};
+        _ ->
+            Req = json_reply(405, #{<<"error">> => <<"Use POST method for queries">>}, Req0),
+            {ok, Req, query}
     end.
 
-%% @doc Handle GET/POST /query requests and forward to port 8080.
-handle_query(Req) ->
-    Method = wade:method(Req),
+%%--------------------------------------------------------------------
+%% Internal handlers
+%%--------------------------------------------------------------------
 
-    case Method of
-        post ->
-            ParsedBody = Req#req.body,
-
-            %% Normaliser en map JSON-like
-            JsonMap =
-                case ParsedBody of
-                    %% Déjà un map (application/json brut)
-                    Map when is_map(Map) ->
-                        Map;
-                    %% Proplist [{Key, Val}, ...] -> convertir en map
-                    List when is_list(List), List =/= [] ->
-                        maps:from_list(
-                          [ 
-                            case K of
-                                A when is_atom(A) -> {atom_to_binary(A, utf8), list_to_binary(V)};
-                                B when is_binary(B) -> {B, list_to_binary(V)};
-                                _ -> {list_to_binary(io_lib:format("~p",[K])), list_to_binary(V)}
-                            end
-                          || {K,V} <- List ]
-                        );
-                    %% Vide ou non reconnu
-                    _ ->
-                        #{}
-                end,
-
-            case maps:get(<<"query">>, JsonMap, undefined) of
+handle_query(RawBody, Req) ->
+    try json:decode(RawBody) of
+        Map when is_map(Map) ->
+            case maps:get(<<"query">>, Map, undefined) of
                 undefined ->
-                    ErrBody = jsx:encode(#{<<"error">> => <<"Missing 'query' key">>}),
-                    {400, ErrBody, [{"content-type", "application/json"}]};
+                    json_reply(400, #{<<"error">> => <<"Missing 'query' key">>}, Req);
                 Query when is_binary(Query) ->
-                    ForwardBody = jsx:encode(JsonMap),
-                    ForwardUrl = "http://localhost:8080/query",
-                    Headers = [{"content-type", "application/json"}],
-                    io:format("Forwarding query to ~p~n", [ForwardUrl]),
-                    case wade:request(post, ForwardUrl, Headers, ForwardBody) of
-                        {ok, _StatusCode, _RespHeaders, ResponseBody} ->
-                            io:format("Received response from disco~n"),
-                            {200, ResponseBody, [{"content-type", "application/json"}]};
-                        {error, Reason} ->
-                            io:format("Forwarding to disco failed: ~p~n", [Reason]),
-                            ErrBody = jsx:encode(#{<<"error">> => <<"Failed to forward request">>}),
-                            {500, ErrBody, [{"content-type", "application/json"}]}
-                    end;
+                    forward_to_disco(Map, Req);
                 _ ->
-                    ErrBody = jsx:encode(#{<<"error">> => <<"Invalid 'query' value">>}),
-                    {400, ErrBody, [{"content-type", "application/json"}]}
-            end;
-
-        get ->
-            io:format("GET request received~n"),
-            ErrBody = jsx:encode(#{<<"error">> => <<"Use POST method for queries">>}),
-            {405, ErrBody, [{"content-type", "application/json"}]};
-        _ ->
-            io:format("Method ~p not allowed~n", [Method]),
-            {405, <<"Method Not Allowed">>, [{"content-type", "text/plain"}]}
-    end.
-
-%% @doc Handle POST /summarize requests.
-handle_summarize(Req) ->
-    Method = wade:method(Req),
-    case Method of
-        post ->
-            ParsedBody = Req#req.body,
-            case ParsedBody of
-                JsonData when is_map(JsonData) ->
-                    Content = maps:get(<<"html">>, JsonData, <<>>),
-                    _Prompt = "Summarize in French: " ++ binary_to_list(Content),
-                    Summary = "Summary: " ++ binary_to_list(Content),
-                    ResponseJson = jsx:encode(#{<<"summary">> => list_to_binary(Summary)}),
-                    {200, ResponseJson, [{"content-type", "application/json"}]};
-                _ ->
-                    ErrJson = jsx:encode(#{<<"error">> => <<"Invalid JSON">>}),
-                    {400, ErrJson, [{"content-type", "application/json"}]}
+                    json_reply(400, #{<<"error">> => <<"Invalid 'query' value">>}, Req)
             end;
         _ ->
-            {405, <<"Method Not Allowed">>, [{"content-type", "text/plain"}]}
+            json_reply(400, #{<<"error">> => <<"Expected a JSON object">>}, Req)
+    catch
+        _:_ ->
+            json_reply(400, #{<<"error">> => <<"Invalid JSON">>}, Req)
     end.
 
-%% @doc Serve static files from priv/static/.
-serve_static(Req) ->
-    FilePath = wade:param(Req, path),
-    StaticDir = filename:join([code:priv_dir(emquest), "static"]),
-    FullPath = filename:join([StaticDir, FilePath]),
-    case filelib:is_regular(FullPath) of
-        true ->
-            case file:read_file(FullPath) of
-                {ok, BinContent} ->
-                    MimeType = case filename:extension(FilePath) of
-                        ".css" -> "text/css";
-                        ".js" -> "application/javascript";
-                        ".html" -> "text/html";
-                        _ -> "application/octet-stream"
-                    end,
-                    {200, BinContent, [{"content-type", MimeType}]};
-                {error, Reason} ->
-                    io:format("Failed to read file ~p: ~p~n", [FullPath, Reason]),
-                    {500, <<"Internal Server Error">>, []}
-            end;
-        false ->
-            io:format("File not found: ~p~n", [FullPath]),
-            {404, <<"File Not Found">>, []}
+forward_to_disco(Map, Req) ->
+    ForwardUrl  = "http://localhost:8080/query",
+    ForwardBody = iolist_to_binary(json:encode(Map)),
+    io:format("[emquest] Forwarding query to ~s~n", [ForwardUrl]),
+    case httpc:request(post,
+                       {ForwardUrl, [], "application/json",
+                        binary_to_list(ForwardBody)},
+                       [], []) of
+        {ok, {{_, 200, _}, _RespHeaders, ResponseBody}} ->
+            RespBin = iolist_to_binary(ResponseBody),
+            cowboy_req:reply(200,
+                #{<<"content-type">> => <<"application/json">>},
+                RespBin, Req);
+        {ok, {{_, Code, _}, _, ResponseBody}} ->
+            io:format("[emquest] Disco returned ~p: ~p~n", [Code, ResponseBody]),
+            cowboy_req:reply(Code,
+                #{<<"content-type">> => <<"application/json">>},
+                iolist_to_binary(ResponseBody), Req);
+        {error, Reason} ->
+            io:format("[emquest] Forwarding to disco failed: ~p~n", [Reason]),
+            json_reply(500, #{<<"error">> => <<"Failed to forward request">>}, Req)
     end.
+
+%%--------------------------------------------------------------------
+%% Helper — encode a map as JSON and reply.
+%%--------------------------------------------------------------------
+json_reply(Code, Map, Req) ->
+    cowboy_req:reply(Code,
+        #{<<"content-type">> => <<"application/json">>},
+        json:encode(Map), Req).
