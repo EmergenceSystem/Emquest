@@ -7,8 +7,7 @@
         kernel,
         stdlib,
         inets,
-        cowboy,
-        embryo
+        cowboy
     ]},
     {env, []},
     {modules, []},
