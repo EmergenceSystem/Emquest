@@ -63,7 +63,6 @@ handle_query(RawBody, Req) ->
 forward_to_disco(Map, Req) ->
     ForwardUrl  = "http://localhost:8080/query",
     ForwardBody = iolist_to_binary(json:encode(Map)),
-    io:format("[emquest] Forwarding query to ~s~n", [ForwardUrl]),
     case httpc:request(post,
                        {ForwardUrl, [], "application/json",
                         binary_to_list(ForwardBody)},
