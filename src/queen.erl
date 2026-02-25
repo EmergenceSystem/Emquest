@@ -1,146 +1,219 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% queen — LLM Synthesis Dispatcher
+%%% queen — LLM Query Expander and Result Ranker
 %%%
-%%% Sits between emquest_handler and em_disco. Receives the raw
-%%% aggregated embryo list, picks the configured LLM handler, and
-%%% returns a structured response the client can render without any
-%%% knowledge of the underlying agents.
+%%% Two responsibilities:
 %%%
-%%% === Response contract (always) ===
+%%%   expand/1  — given a user query, returns a list of simpler
+%%%               sub-queries to fan out to disco.  For short/simple
+%%%               queries returns [Query] as-is.
 %%%
-%%% ```json
-%%% {
-%%%   "answer": "Human-readable synthesis",
-%%%   "items":  [
-%%%     { "label": "...", "value": "...", "url": "https://..." }
-%%%   ]
-%%% }
-%%% '''
-%%% `items' is optional — the LLM decides whether it adds value.
-%%% `url'   inside each item is optional.
+%%%   rank/2    — given the original query and the full deduplicated
+%%%               result list, asks the LLM to return a sorted order
+%%%               (most relevant first).  ALL results are kept —
+%%%               nothing is hidden.  Results that appear in multiple
+%%%               sub-queries (redundant) are boosted automatically
+%%%               because the deduplication keeps the first occurrence
+%%%               and the LLM sees the frequency in the raw data.
 %%%
-%%% === Handler dispatch ===
+%%% === LLM ranking contract ===
 %%%
-%%% The [llm] provider key in emergence.conf selects the handler:
-%%%   mistral → mistral_handler  (default)
-%%%   ollama  → ollama_handler
-%%%   openai  → openai_handler
-%%%   claude  → claude_handler
-%%%
-%%% Each handler must export generate/2 :: (Prompt, Config) ->
-%%%   {ok, Binary} | {error, Reason}
-%%%
-%%% queen builds the prompt and system instruction, then calls the
-%%% appropriate handler with its native config map.
-%%% The JSON output contract is enforced via the system prompt —
-%%% individual handlers are not aware of it.
+%%% The LLM receives the list with indices and returns ONLY a JSON
+%%% array of those indices in relevance order, e.g.: [2, 0, 4, 1, 3]
+%%% This is cheap (no content regeneration) and unambiguous.
+%%% Each ranked item gets a score (3 = top, 0 = tail) based on
+%%% its position in the returned list.
 %%%
 %%% === Configuration (emergence.conf) ===
 %%%
-%%% ```ini
 %%% [llm]
 %%% provider      = mistral
 %%% model         = mistral-small-latest
-%%% temperature   = 0.3
-%%% system_prompt = You are a helpful assistant. Answer in French.
-%%% ; api_key is read from MISTRAL_API_KEY / OPENAI_API_KEY /
-%%% ;   ANTHROPIC_API_KEY env variables by each handler.
-%%% '''
+%%% temperature   = 0.1          ; low temp for deterministic ranking
+%%% system_prompt = ...
 %%%
 %%% @author Steve Roques
 %%% @end
 %%%-------------------------------------------------------------------
 -module(queen).
 
--export([process/2, expand/2, parse_query_list/1, conf_path/0, parse_conf/1]).
-
-%% JSON output contract appended to every system prompt.
-%% Kept separate so the user-facing system_prompt stays clean.
--define(JSON_CONTRACT,
-    "\n\nYou must always reply with a raw JSON object — "
-    "no markdown, no code fences, no explanation outside the JSON:\n"
-    "{\n"
-    "  \"answer\": \"concise synthesis (2-4 sentences)\",\n"
-    "  \"items\": [\n"
-    "    { \"label\": \"title or key\", \"value\": \"description\", \"url\": \"https://...\" }\n"
-    "  ]\n"
-    "}\n"
-    "Rules:\n"
-    "- Omit 'items' entirely when a list adds no value "
-    "(direct factual answer, already summarised data, etc.).\n"
-    "- Include 'items' when there are URLs, records, or structured "
-    "data worth surfacing.\n"
-    "- 'url' inside an item is optional — include only when genuinely useful.\n"
-    "- Never invent information not present in the raw results.\n"
-    "- Reply in the same language as the user's query."
-).
+-export([expand/1, rank/2, synthesize/2, conf_path/0, parse_conf/1]).
 
 -define(DEFAULT_SYSTEM_PROMPT,
-    "You are a synthesis assistant integrated into a distributed search system. "
-    "Be concise and accurate."
-).
+    "You are a search assistant. Be concise and precise.").
+
+%%====================================================================
+%% Query expansion
+%%====================================================================
 
 %%--------------------------------------------------------------------
-%% @doc Synthesises raw em_disco results using the configured LLM.
+%% @doc Expands a user query into simpler search sub-queries.
+%%
+%% For queries under 25 chars, skips expansion and returns [Query].
+%% Otherwise asks the LLM for 2-3 relevant sub-queries and always
+%% prepends the original query so it is always searched as-is.
 %% @end
 %%--------------------------------------------------------------------
--spec process(binary(), list()) -> map().
-process(Query, RawResults) ->
-    Conf       = read_llm_conf(),
-    Provider   = maps:get(provider, Conf, <<"mistral">>),
-    SysPrompt  = build_system_prompt(Conf),
-    UserPrompt = build_user_prompt(Query, RawResults),
-    HandlerConf = handler_conf(Provider, Conf, SysPrompt),
-
-    Result = case Provider of
-        <<"mistral">> -> mistral_handler:generate(UserPrompt, HandlerConf);
-        <<"ollama">>  -> ollama_handler:generate(UserPrompt, HandlerConf);
-        <<"openai">>  -> openai_handler:generate(UserPrompt, HandlerConf);
-        <<"claude">>  -> claude_handler:generate(UserPrompt, HandlerConf);
-        Unknown ->
-            logger:warning("[queen] Unknown provider '~s', falling back to mistral", [Unknown]),
-            mistral_handler:generate(UserPrompt, HandlerConf)
+-spec expand(binary()) -> [binary()].
+expand(Query) when byte_size(Query) < 25 ->
+    [Query];
+expand(Query) ->
+    Conf   = read_llm_conf(),
+    Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
+               "this query. Reply ONLY with a raw JSON array of strings, "
+               "no markdown, no explanation.\n"
+               "Example: [\"term one\", \"term two\"]\n\n"
+               "Query: ", Query/binary>>,
+    HandlerConf = handler_conf(
+        maps:get(provider, Conf, <<"mistral">>),
+        Conf,
+        <<"You extract search keywords. Reply only with a JSON array of strings.">>
+    ),
+    SubQueries = case call_handler(maps:get(provider, Conf, <<"mistral">>),
+                                   Prompt, HandlerConf) of
+        {ok, Text} -> parse_json_list(Text);
+        _          -> []
     end,
+    %% Original query always first, then sub-queries (deduplicated)
+    lists:usort([Query | SubQueries]).
 
-    case Result of
-        {ok, Text}      -> parse_llm_response(Text);
-        {error, Reason} ->
-            logger:error("[queen] LLM error (~s): ~p", [Provider, Reason]),
-            fallback_response(RawResults)
+%%====================================================================
+%% Synthesis
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% @doc Generates a short prose answer for the query.
+%%
+%% Called after ranking so the LLM has context from the top results.
+%% Uses the user-configured system_prompt (language, tone, etc.).
+%% Returns plain text binary — no JSON, goes straight to the client.
+%% @end
+%%--------------------------------------------------------------------
+-spec synthesize(binary(), [map()]) -> binary().
+synthesize(Query, RankedItems) ->
+    Conf     = read_llm_conf(),
+    Provider = maps:get(provider, Conf, <<"mistral">>),
+    SysPrompt = ensure_binary(maps:get(system_prompt, Conf, ?DEFAULT_SYSTEM_PROMPT)),
+
+    %% Pass only the top 5 as context to keep the prompt small
+    TopN = lists:sublist(RankedItems, 5),
+    Context = iolist_to_binary(json:encode(
+        [begin
+            Props = maps:get(<<"properties">>, Item, Item),
+            Label = maps:get(<<"title">>,  Props, maps:get(<<"label">>,  Props, <<>>)),
+            Value = maps:get(<<"resume">>, Props, maps:get(<<"value">>,  Props, <<>>)),
+            #{<<"l">> => Label, <<"v">> => Value}
+         end || Item <- TopN]
+    )),
+
+    Prompt = <<"Answer or summarise the following query in 2-4 sentences. "
+               "Use the provided search results as context. "
+               "Reply in plain text only — no JSON, no markdown, no bullet points.\n\n"
+               "Query: ", Query/binary, "\n\n"
+               "Top results context:\n", Context/binary>>,
+
+    HandlerConf = handler_conf(Provider, Conf, SysPrompt),
+    case call_handler(Provider, Prompt, HandlerConf) of
+        {ok, Text} -> Text;
+        _          -> <<>>
     end.
 
 %%====================================================================
-%% Prompt building
+%% Result ranking
 %%====================================================================
 
--spec build_system_prompt(map()) -> binary().
-build_system_prompt(Conf) ->
-    Base    = ensure_binary(maps:get(system_prompt, Conf, ?DEFAULT_SYSTEM_PROMPT)),
-    Contract = unicode:characters_to_binary(?JSON_CONTRACT, utf8),
-    <<Base/binary, Contract/binary>>.
+%%--------------------------------------------------------------------
+%% @doc Ranks a result list by relevance to the query.
+%%
+%% Sends the list with numeric indices to the LLM, which returns
+%% those indices sorted by relevance (most relevant first).
+%% ALL items are kept — only the order changes.
+%% Items get a score 0-3 based on their rank quartile.
+%% @end
+%%--------------------------------------------------------------------
+-spec rank(binary(), [map()]) -> [map()].
+rank(_Query, []) -> [];
+rank(Query, Items) ->
+    Conf = read_llm_conf(),
 
--spec build_user_prompt(binary(), list()) -> binary().
-build_user_prompt(Query, RawResults) ->
-    ResultsJson = iolist_to_binary(json:encode(RawResults)),
-    <<"User query: ", Query/binary,
-      "\n\nRaw agent results (JSON):\n", ResultsJson/binary>>.
+    %% Build a compact index representation for the LLM
+    Indexed = lists:zip(lists:seq(0, length(Items) - 1), Items),
+    IndexedJson = iolist_to_binary(json:encode(
+        [begin
+            Props = maps:get(<<"properties">>, Item, Item),
+            Label = maps:get(<<"title">>,  Props,
+                        maps:get(<<"label">>,  Props, <<>>)),
+            Value = maps:get(<<"resume">>, Props,
+                        maps:get(<<"value">>,  Props, <<>>)),
+            #{<<"i">> => I, <<"l">> => Label, <<"v">> => Value}
+         end || {I, Item} <- Indexed]
+    )),
+
+    Prompt = <<"You receive search results and a query. "
+               "Return ONLY a JSON array of the result indices sorted "
+               "by relevance to the query (most relevant first). "
+               "Keep ALL indices. No explanation, no markdown.\n"
+               "Example for 4 results: [2, 0, 3, 1]\n\n"
+               "Query: ", Query/binary, "\n\n"
+               "Results:\n", IndexedJson/binary>>,
+
+    HandlerConf = handler_conf(
+        maps:get(provider, Conf, <<"mistral">>),
+        %% Low temperature for deterministic ranking
+        Conf#{temperature => 0.1},
+        <<"You rank search results. Reply only with a JSON array of integers.">>
+    ),
+
+    RankedIndices = case call_handler(maps:get(provider, Conf, <<"mistral">>),
+                                      Prompt, HandlerConf) of
+        {ok, Text} ->
+            Parsed = parse_json_integers(Text),
+            %% Safety: fill missing indices at the end
+            All    = lists:seq(0, length(Items) - 1),
+            Missing = All -- Parsed,
+            Parsed ++ Missing;
+        _ ->
+            lists:seq(0, length(Items) - 1)
+    end,
+
+    %% Re-order items and inject score based on rank position
+    Total = length(RankedIndices),
+    ItemsArr = list_to_tuple(Items),
+    lists:filtermap(fun({Pos, Idx}) ->
+        case Idx >= 0 andalso Idx < tuple_size(ItemsArr) of
+            true ->
+                Item  = element(Idx + 1, ItemsArr),
+                Score = score_for_position(Pos, Total),
+                {true, Item#{<<"score">> => Score}};
+            false -> false
+        end
+    end, lists:zip(lists:seq(0, length(RankedIndices) - 1), RankedIndices)).
+
+%% Maps a 0-based position to a 0-3 relevance score.
+score_for_position(_Pos, Total) when Total =< 1 -> 3;
+score_for_position(Pos, Total) ->
+    Quartile = (Pos * 4) div Total,
+    max(0, 3 - Quartile).
 
 %%====================================================================
-%% Handler config mapping
+%% LLM dispatch
 %%====================================================================
+
+call_handler(<<"mistral">>, Prompt, Conf) -> mistral_handler:generate(Prompt, Conf);
+call_handler(<<"ollama">>,  Prompt, Conf) -> ollama_handler:generate(Prompt, Conf);
+call_handler(<<"openai">>,  Prompt, Conf) -> openai_handler:generate(Prompt, Conf);
+call_handler(<<"claude">>,  Prompt, Conf) -> claude_handler:generate(Prompt, Conf);
+call_handler(_, Prompt, Conf)             -> mistral_handler:generate(Prompt, Conf).
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc Builds the config map for the target handler.
+%% @doc Builds a handler config from emergence.conf + env vars.
 %%
-%% Starts from the handler's own get_env_config/0 so that
-%% MISTRAL_API_KEY / OPENAI_API_KEY etc. are picked up automatically,
-%% then overlays model / temperature / system_prompt from emergence.conf.
-%% API keys are never stored in conf — each handler owns that.
+%% Starts from the handler's get_env_config/0 (picks up API keys
+%% from environment), then overlays conf values and the given
+%% system prompt.
 %% @end
 %%--------------------------------------------------------------------
--spec handler_conf(binary(), map(), binary()) -> map().
 handler_conf(Provider, Conf, SysPrompt) ->
     Base = case Provider of
         <<"mistral">> -> mistral_handler:get_env_config();
@@ -149,109 +222,42 @@ handler_conf(Provider, Conf, SysPrompt) ->
         <<"claude">>  -> (catch claude_handler:get_env_config());
         _             -> mistral_handler:get_env_config()
     end,
-
     Overrides = maps:filter(fun(_, V) -> V =/= undefined end, #{
         model         => maps:get(model,       Conf, undefined),
         temperature   => maps:get(temperature, Conf, undefined),
-        system_prompt => SysPrompt
+        system_prompt => ensure_binary(SysPrompt)
     }),
-
     case is_map(Base) of
         true  -> maps:merge(Base, Overrides);
         false -> Overrides
     end.
 
 %%====================================================================
-%% Response parsing
+%% JSON parsing helpers
 %%====================================================================
 
--spec parse_llm_response(binary()) -> map().
-parse_llm_response(Text) ->
-    Cleaned = strip_code_fences(Text),
+parse_json_list(Text) ->
     try
-        Decoded = json:decode(Cleaned),
-        case maps:is_key(<<"answer">>, Decoded) of
-            true  -> Decoded;
-            false -> #{<<"answer">> => Text}
-        end
-    catch _:_ ->
-        #{<<"answer">> => Text}
-    end.
+        List = json:decode(strip_fences(Text)),
+        [Q || Q <- List, is_binary(Q)]
+    catch _:_ -> [] end.
 
--spec strip_code_fences(binary()) -> binary().
-strip_code_fences(Text) ->
+parse_json_integers(Text) ->
+    try
+        List = json:decode(strip_fences(Text)),
+        [I || I <- List, is_integer(I)]
+    catch _:_ -> [] end.
+
+strip_fences(Text) ->
     T1 = re:replace(Text, <<"^```(json)?\\s*">>, <<"">>,
                     [{return, binary}, multiline]),
-    re:replace(T1, <<"\\s*```$">>, <<"">>, [{return, binary}, multiline]).
-
-%%====================================================================
-%% Fallback
-%%====================================================================
-
--spec fallback_response(list()) -> map().
-fallback_response(RawResults) ->
-    Items = lists:filtermap(fun(Embryo) ->
-        Props = maps:get(<<"properties">>, Embryo, #{}),
-        case map_size(Props) of
-            0 -> false;
-            _ ->
-                Url   = maps:get(<<"url">>,    Props, null),
-                Label = maps:get(<<"title">>,  Props,
-                            maps:get(<<"label">>, Props, <<"Result">>)),
-                Value = maps:get(<<"resume">>, Props,
-                            maps:get(<<"value">>, Props, <<>>)),
-                {true, #{<<"label">> => Label,
-                         <<"value">> => Value,
-                         <<"url">>   => Url}}
-        end
-    end, RawResults),
-    Base = #{<<"answer">> => <<"LLM unavailable — raw results below.">>},
-    case Items of
-        [] -> Base;
-        _  -> Base#{<<"items">> => Items}
-    end.
-
-%%--------------------------------------------------------------------
-%% @doc Expands a complex query into simpler search sub-queries.
-%%
-%% Returns the original query plus extracted keywords/sub-terms.
-%% When Expand is false (short/simple query), returns [Query] as-is.
-%% @end
-%%--------------------------------------------------------------------
--spec expand(binary(), boolean()) -> [binary()].
-expand(Query, false) -> [Query];
-expand(Query, true) ->
-    Conf   = read_llm_conf(),
-    Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
-               "this complex query. Reply ONLY with a JSON array of strings, "
-               "nothing else. Example: [\"term1\", \"term2\"]\n\n"
-               "Query: ", Query/binary>>,
-    HandlerConf = handler_conf(
-        maps:get(provider, Conf, <<"mistral">>),
-        Conf#{system_prompt => <<"You extract search keywords. Reply only with a JSON array.">>},
-        <<"You extract search keywords. Reply only with a JSON array.">>
-    ),
-    SubQueries = case mistral_handler:generate(Prompt, HandlerConf) of
-        {ok, Text} -> parse_query_list(Text);
-        _          -> []
-    end,
-    %% Always include the original query
-    lists:usort([Query | SubQueries]).
-
--spec parse_query_list(binary()) -> [binary()].
-parse_query_list(Text) ->
-    Cleaned = strip_code_fences(Text),
-    try
-        List = json:decode(Cleaned),
-        [Q || Q <- List, is_binary(Q)]
-    catch _:_ -> []
-    end.
+    re:replace(T1, <<"\\s*```$">>, <<"">>,
+               [{return, binary}, multiline]).
 
 %%====================================================================
 %% Configuration
 %%====================================================================
 
--spec read_llm_conf() -> map().
 read_llm_conf() ->
     case conf_path() of
         undefined -> #{};
@@ -262,7 +268,6 @@ read_llm_conf() ->
             end
     end.
 
--spec parse_llm_section(map()) -> map().
 parse_llm_section(ConfMap) ->
     Section = maps:get("llm", ConfMap, #{}),
     maps:fold(fun(K, V, Acc) ->
@@ -279,8 +284,8 @@ parse_llm_section(ConfMap) ->
     end, #{}, Section).
 
 %%--------------------------------------------------------------------
-%% @doc Returns the path to emergence.conf, or undefined.
-%% Exported for reuse by emquest_handler.
+%% @doc Returns the path to emergence.conf.
+%% Exported so emquest_handler can reuse it.
 %% @end
 %%--------------------------------------------------------------------
 -spec conf_path() -> string() | undefined.
@@ -297,9 +302,8 @@ conf_path() ->
     end.
 
 %%--------------------------------------------------------------------
-%% @doc Parses an INI-style config file into a nested map.
-%%   #{ "section" => #{ "key" => "value" } }
-%% Exported for reuse by emquest_handler.
+%% @doc Parses an INI-style config file.
+%% Exported so emquest_handler can reuse it.
 %% @end
 %%--------------------------------------------------------------------
 -spec parse_conf(binary()) -> map().
@@ -308,7 +312,6 @@ parse_conf(Bin) ->
     {Map, _} = lists:foldl(fun parse_line/2, {#{}, ""}, Lines),
     Map.
 
-%% Skip comment lines (starting with ; or #)
 parse_line(<<";", _/binary>>, Acc) -> Acc;
 parse_line(<<"#", _/binary>>, Acc) -> Acc;
 parse_line(<<"[", Rest/binary>>, {Map, _Sec}) ->
@@ -324,7 +327,6 @@ parse_line(Line, {Map, Sec}) when Sec =/= "" ->
     end;
 parse_line(_, Acc) -> Acc.
 
--spec ensure_binary(term()) -> binary().
 ensure_binary(B) when is_binary(B) -> B;
 ensure_binary(L) when is_list(L)   -> list_to_binary(L);
 ensure_binary(A) when is_atom(A)   -> atom_to_binary(A, utf8);

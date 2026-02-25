@@ -1,183 +1,162 @@
 /**
- * emergence.js — Emquest Browser Client
+ * emergence.js — Emquest Browser Client (SSE streaming)
  *
- * Responsibilities:
- *   1. Auto-resize textarea as the user types.
- *   2. Submit queries via POST /query and render the structured response.
- *   3. Render a generic { answer, items } contract — never tied to a
- *      specific agent type.  New agents require zero changes here.
- *   4. Ambient canvas background (animated dot grid).
- *   5. Clock, scroll-shadow on header, agent count in footer.
+ * Reads a Server-Sent Events stream from POST /query.
+ * Events:
+ *   {type: "status",  message: "..."}  → appended to progress log
+ *   {type: "results", items: [...]}    → replaces progress log with results
+ *   {type: "error",   message: "..."}  → shows error card
+ *
+ * Item rendering is type-aware but fully generic:
+ *   item.url present  → web result  (link + resume)
+ *   item.ips present  → DNS result  (IP badge list)
+ *   neither           → generic     (label + value)
+ *
+ * score (0-3) from the LLM drives a visual relevance indicator.
  */
 
 /* ================================================================== */
-/* 1. Ambient canvas background                                       */
+/* Ambient canvas background                                          */
 /* ================================================================== */
-
 (function initCanvas() {
     const canvas = document.getElementById('bg-canvas');
     if (!canvas) return;
-
-    const ctx    = canvas.getContext('2d');
-    const COLS   = 40;     // approximate columns of dots
-    const COLOR  = '0, 220, 100';
-    let   dots   = [];
-    let   raf;
+    const ctx = canvas.getContext('2d');
+    let dots = [];
 
     function resize() {
         canvas.width  = window.innerWidth;
         canvas.height = window.innerHeight;
-        buildDots();
-    }
-
-    function buildDots() {
-        dots = [];
-        const spacing = canvas.width / COLS;
+        const spacing = canvas.width / 40;
         const rows    = Math.ceil(canvas.height / spacing) + 1;
-        for (let r = 0; r <= rows; r++) {
-            for (let c = 0; c <= COLS; c++) {
-                dots.push({
-                    x:     c * spacing,
-                    y:     r * spacing,
-                    phase: Math.random() * Math.PI * 2,
-                    speed: 0.4 + Math.random() * 0.6,
-                });
-            }
-        }
+        dots = [];
+        for (let r = 0; r <= rows; r++)
+            for (let c = 0; c <= 40; c++)
+                dots.push({ x: c * spacing, y: r * spacing,
+                             phase: Math.random() * Math.PI * 2,
+                             speed: 0.4 + Math.random() * 0.6 });
     }
 
     function draw(ts) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const t = ts * 0.001;
         dots.forEach(d => {
-            const alpha = 0.08 + 0.07 * Math.sin(t * d.speed + d.phase);
+            const a = 0.06 + 0.06 * Math.sin(t * d.speed + d.phase);
             ctx.beginPath();
             ctx.arc(d.x, d.y, 1.5, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(${COLOR}, ${alpha})`;
+            ctx.fillStyle = `rgba(0,220,100,${a})`;
             ctx.fill();
         });
-        raf = requestAnimationFrame(draw);
+        requestAnimationFrame(draw);
     }
 
     window.addEventListener('resize', resize);
     resize();
-    raf = requestAnimationFrame(draw);
+    requestAnimationFrame(draw);
 })();
 
 /* ================================================================== */
-/* 2. Clock                                                           */
+/* Clock                                                              */
 /* ================================================================== */
-
 function updateClock() {
     const el = document.getElementById('clock');
     if (!el) return;
-    const n = new Date();
-    const pad = v => String(v).padStart(2, '0');
+    const n = new Date(), p = v => String(v).padStart(2, '0');
     el.textContent =
-        `${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())} `
-        + `${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+        `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())} `
+        + `${p(n.getHours())}:${p(n.getMinutes())}:${p(n.getSeconds())}`;
 }
-
 setInterval(updateClock, 1000);
 updateClock();
 
 /* ================================================================== */
-/* 3. Header scroll-shadow                                            */
+/* Header scroll shadow                                               */
 /* ================================================================== */
-
 window.addEventListener('scroll', () => {
     document.getElementById('app-header')
-        .classList.toggle('scrolled', window.scrollY > 8);
+        ?.classList.toggle('scrolled', window.scrollY > 8);
 }, { passive: true });
 
 /* ================================================================== */
-/* 4. Agent count in footer (polling /registry)                       */
+/* Agent count (footer)                                               */
 /* ================================================================== */
-
 async function refreshAgentCount() {
     try {
         const r = await fetch('http://localhost:8080/registry');
         if (!r.ok) return;
-        const data  = await r.json();
-        const count = (data.agents || []).length;
-        const el    = document.getElementById('footer-agent-count');
-        if (el) el.textContent = `${count} agent${count !== 1 ? 's' : ''} connected`;
-    } catch (_) {
-        /* disco unreachable — footer stays as-is */
-    }
+        const d = await r.json();
+        const n = (d.agents || []).length;
+        const el = document.getElementById('footer-agent-count');
+        if (el) el.textContent = `${n} agent${n !== 1 ? 's' : ''} connected`;
+    } catch (_) {}
 }
-
 refreshAgentCount();
 setInterval(refreshAgentCount, 15000);
 
 /* ================================================================== */
-/* 5. Textarea auto-resize                                            */
+/* Textarea auto-resize                                               */
 /* ================================================================== */
-
 const queryInput = document.getElementById('query-input');
-
-queryInput.addEventListener('input', function () {
+queryInput?.addEventListener('input', function () {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
 
 /* ================================================================== */
-/* 6. Submit logic                                                    */
+/* Submit                                                             */
 /* ================================================================== */
-
-queryInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        submitQuery();
-    }
+queryInput?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitQuery(); }
 });
+document.getElementById('send-btn')?.addEventListener('click', submitQuery);
 
-document.getElementById('send-btn').addEventListener('click', submitQuery);
-
-/**
- * Reads the textarea value, POSTs to /query, and renders the result.
- */
 async function submitQuery() {
-    const query = queryInput.value.trim();
+    const query = queryInput?.value.trim();
     if (!query) return;
 
-    const btn        = document.getElementById('send-btn');
-    const metaStatus = document.getElementById('meta-status');
-    const results    = document.getElementById('results');
-    const emptyState = document.getElementById('empty-state');
+    const btn     = document.getElementById('send-btn');
+    const results = document.getElementById('results');
+    const empty   = document.getElementById('empty-state');
 
-    // UI: loading state
     btn.classList.add('loading');
     btn.disabled = true;
-    metaStatus.className = 'meta-status';
-    metaStatus.textContent = 'querying agents…';
+    empty.hidden   = true;
+    results.hidden = false;
 
-    // Hide empty state, show skeleton
-    emptyState.hidden = true;
-    results.hidden    = false;
-    results.innerHTML = renderSkeleton();
+    /* Show live progress log */
+    results.innerHTML = `<div class="progress-log" id="progress-log"></div>`;
 
     try {
         const resp = await fetch('/query', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ query }),
+            body: JSON.stringify({ query }),
         });
 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-        const data = await resp.json();
-        results.innerHTML = renderResponse(data);
-        metaStatus.textContent = '';
+        /* Read the SSE stream line by line */
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let   buffer  = '';
 
-        // Scroll results into view on mobile
-        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            /* SSE events are separated by \n\n */
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop();       // keep incomplete tail
+            for (const part of parts) {
+                const line = part.trim();
+                if (line.startsWith('data: ')) {
+                    handleEvent(JSON.parse(line.slice(6)), results);
+                }
+            }
+        }
     } catch (err) {
-        console.error('[emquest] Query failed:', err);
+        console.error('[emquest]', err);
         results.innerHTML = renderError(err.message);
-        metaStatus.className  = 'meta-status error';
-        metaStatus.textContent = 'request failed';
     } finally {
         btn.classList.remove('loading');
         btn.disabled = false;
@@ -185,155 +164,162 @@ async function submitQuery() {
 }
 
 /* ================================================================== */
-/* 7. Renderers                                                       */
+/* SSE event handler                                                  */
 /* ================================================================== */
 
 /**
- * Renders the full structured response: answer card + optional items.
- *
- * Contract:
- *   { answer: string, items?: Array<{ label, value, url? }> }
- *
- * This renderer is intentionally generic — it does not know about
- * agent types.  The LLM (queen) decides what goes in answer / items.
- *
- * @param {Object} data - The parsed JSON response from /query.
- * @returns {string} HTML string.
+ * Dispatches an incoming SSE event to the appropriate renderer.
+ * @param {{ type: string, message?: string, items?: Array }} event
+ * @param {HTMLElement} container
  */
-function renderResponse(data) {
-    const parts = [];
+function handleEvent(event, container) {
+    switch (event.type) {
 
-    // ── Answer card ─────────────────────────────────────────────
-    if (data.answer) {
-        parts.push(`
-            <div class="answer-card">
-                <div class="answer-label">SYNTHESIS</div>
-                <p class="answer-text">${escapeHtml(data.answer)}</p>
-            </div>
-        `);
+        case 'status': {
+            /* Append a line to the live progress log */
+            const log = document.getElementById('progress-log');
+            if (!log) return;
+            const line = document.createElement('div');
+            line.className = 'progress-line';
+            line.innerHTML = `<span class="progress-arrow">›</span> ${escHtml(event.message)}`;
+            log.appendChild(line);
+            line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            break;
+        }
+
+        case 'answer': {
+            /* Show the LLM answer card above results (created lazily) */
+            let card = document.getElementById('answer-card');
+            if (!card) {
+                card = document.createElement('div');
+                card.id        = 'answer-card';
+                card.className = 'answer-card';
+                card.innerHTML = `<div class="answer-label">ANSWER</div>
+                                  <p class="answer-text" id="answer-text"></p>`;
+                container.innerHTML = '';
+                container.appendChild(card);
+                /* Placeholder for results that will follow */
+                const list = document.createElement('div');
+                list.id = 'results-placeholder';
+                container.appendChild(list);
+            }
+            document.getElementById('answer-text').textContent = event.message;
+            break;
+        }
+
+        case 'results': {
+            /* Inject results — either into placeholder or replace everything */
+            const placeholder = document.getElementById('results-placeholder');
+            const html = renderResults(event.items || []);
+            if (placeholder) {
+                placeholder.outerHTML = html;
+            } else {
+                container.innerHTML = html;
+            }
+            break;
+        }
+
+        case 'error': {
+            container.innerHTML = renderError(event.message);
+            break;
+        }
     }
+}
 
-    // ── Items section ────────────────────────────────────────────
-    const items = data.items;
-    if (Array.isArray(items) && items.length > 0) {
-        const itemsHtml = items.map((item, i) => renderItem(item, i)).join('');
-        parts.push(`
-            <div class="items-section">
-                <div class="items-label">RESULTS</div>
-                <ul class="items-list">${itemsHtml}</ul>
-            </div>
-        `);
-    }
+/* ================================================================== */
+/* Renderers                                                          */
+/* ================================================================== */
 
-    // ── Fallback if both are absent ──────────────────────────────
-    if (parts.length === 0) {
-        parts.push(renderError('No results returned.'));
-    }
+/**
+ * Renders the full results list.
+ * Items are already sorted by queen (most relevant first, score 3→0).
+ * Nothing is hidden.
+ */
+function renderResults(items) {
+    if (!items.length) return renderError('No results found.');
 
-    return parts.join('');
+    const itemsHtml = items.map((item, i) => renderItem(item, i)).join('');
+    return `<ul class="items-list">${itemsHtml}</ul>`;
 }
 
 /**
- * Renders a single result item.
+ * Renders one result item.
  *
- * Each item has: label (required), value (optional), url (optional).
- * When url is present, the label becomes a clickable link.
+ * Type detection:
+ *   item.url   → web result  → title as link + resume text
+ *   item.ips   → DNS result  → IP badges
+ *   neither    → generic     → label + value
  *
- * @param {{ label: string, value?: string, url?: string }} item
- * @param {number} index - Zero-based index for display number.
- * @returns {string} HTML string for a <li>.
+ * score (0-3) drives the left-border accent colour.
  */
 function renderItem(item, index) {
     const num   = String(index + 1).padStart(2, '0');
-    const label = item.label || '';
-    const value = item.value || '';
-    const url   = item.url && item.url !== 'null' ? item.url : null;
+    const score = item.score ?? 0;
+    const scoreClass = ['score-0', 'score-1', 'score-2', 'score-3'][score] ?? 'score-0';
 
-    // Label is a link when url is present
-    const labelHtml = url
-        ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener"
-               class="item-label">${escapeHtml(label)}</a>`
-        : `<span class="item-label">${escapeHtml(label)}</span>`;
+    let bodyHtml = '';
 
-    const arrowHtml = url
-        ? `<span class="item-arrow" aria-hidden="true">↗</span>`
-        : '';
+    if (item.url) {
+        /* ── Web result ─────────────────────────────────────────── */
+        bodyHtml = `
+            <a href="${escAttr(item.url)}" target="_blank" rel="noopener"
+               class="item-label item-link">${escHtml(item.label)}</a>
+            <p class="item-url-display">${escHtml(item.url)}</p>
+            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
+        `;
+    } else if (Array.isArray(item.ips) && item.ips.length) {
+        /* ── DNS result ─────────────────────────────────────────── */
+        const ipBadges = item.ips
+            .map(ip => `<span class="ip-badge">${escHtml(String(ip))}</span>`)
+            .join('');
+        bodyHtml = `
+            <span class="item-label">${escHtml(item.label)}</span>
+            <div class="ip-list">${ipBadges}</div>
+            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
+        `;
+    } else {
+        /* ── Generic result ─────────────────────────────────────── */
+        bodyHtml = `
+            <span class="item-label">${escHtml(item.label)}</span>
+            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
+        `;
+    }
+
+    /* Whole card is clickable when a URL is present */
+    const clickable = item.url ? `onclick="window.open('${escAttr(item.url)}','_blank','noopener')"
+                                  style="cursor:pointer"` : '';
 
     return `
-        <li class="item-card">
-            <span class="item-index">${escapeHtml(num)}</span>
-            <div class="item-body">
-                ${labelHtml}
-                ${value ? `<p class="item-value">${escapeHtml(value)}</p>` : ''}
-            </div>
-            ${arrowHtml}
+        <li class="item-card ${scoreClass}"
+            style="animation-delay:${index * 60}ms"
+            ${clickable}>
+            <span class="item-index">${escHtml(num)}</span>
+            <div class="item-body">${bodyHtml}</div>
+            ${item.url ? `<span class="item-arrow">↗</span>` : ''}
         </li>
     `;
 }
 
-/**
- * Renders a loading skeleton (shown while the query is in flight).
- * @returns {string} HTML string.
- */
-function renderSkeleton() {
-    return `
-        <div class="skeleton">
-            <div class="skeleton-answer">
-                <div class="skeleton-line long"></div>
-                <div class="skeleton-line full"></div>
-                <div class="skeleton-line short"></div>
-            </div>
-            <div class="skeleton-answer">
-                <div class="skeleton-line full"></div>
-                <div class="skeleton-line long"></div>
-            </div>
-        </div>
-    `;
-}
-
-/**
- * Renders an error card.
- * @param {string} message
- * @returns {string} HTML string.
- */
-function renderError(message) {
+function renderError(msg) {
     return `
         <div class="error-card">
             <span class="error-icon">⚠</span>
-            <span>${escapeHtml(message || 'An unexpected error occurred.')}</span>
-        </div>
-    `;
+            <span>${escHtml(msg || 'Unexpected error.')}</span>
+        </div>`;
 }
 
 /* ================================================================== */
-/* 8. Utilities                                                       */
+/* Utilities                                                          */
 /* ================================================================== */
-
-/**
- * Escapes a string for safe insertion into HTML text content.
- * @param {string} str
- * @returns {string}
- */
-function escapeHtml(str) {
-    if (str === null || str === undefined) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+function escHtml(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
 }
-
-/**
- * Escapes a string for safe use in an HTML attribute value.
- * Only allows http/https URLs; strips everything else.
- * @param {string} str
- * @returns {string}
- */
-function escapeAttr(str) {
-    if (!str) return '#';
-    const s = String(str).trim();
-    // Reject non-http(s) schemes to prevent javascript: injection
-    if (!/^https?:\/\//i.test(s)) return '#';
-    return s.replace(/"/g, '%22');
+function escAttr(s) {
+    if (!s) return '#';
+    const t = String(s).trim();
+    return /^https?:\/\//i.test(t) ? t.replace(/"/g,'%22') : '#';
 }
