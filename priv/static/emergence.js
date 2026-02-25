@@ -1,350 +1,339 @@
-/* ------------------------------------------------------------------ */
-/* Timestamp — updates every second in the header                      */
-/* ------------------------------------------------------------------ */
-function updateTimestamp() {
-    const now = new Date();
-    const timestamp = now.toLocaleString('en-US', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false
-    }).replace(/[/:]/g, '.').replace(', ', ' ');
+/**
+ * emergence.js — Emquest Browser Client
+ *
+ * Responsibilities:
+ *   1. Auto-resize textarea as the user types.
+ *   2. Submit queries via POST /query and render the structured response.
+ *   3. Render a generic { answer, items } contract — never tied to a
+ *      specific agent type.  New agents require zero changes here.
+ *   4. Ambient canvas background (animated dot grid).
+ *   5. Clock, scroll-shadow on header, agent count in footer.
+ */
 
-    const el = document.getElementById('timestamp');
-    if (el) el.textContent = timestamp;
-}
+/* ================================================================== */
+/* 1. Ambient canvas background                                       */
+/* ================================================================== */
 
-/* ------------------------------------------------------------------ */
-/* Scan animation — fades a result item in from below                 */
-/* ------------------------------------------------------------------ */
-function scanEffect(element) {
-    element.style.opacity   = '0';
-    element.style.transform = 'translateY(20px)';
-    setTimeout(() => {
-        element.style.transition = 'all 0.5s ease';
-        element.style.opacity    = '1';
-        element.style.transform  = 'translateY(0)';
-    }, 100);
-}
+(function initCanvas() {
+    const canvas = document.getElementById('bg-canvas');
+    if (!canvas) return;
 
-/* ------------------------------------------------------------------ */
-/* Notification banner — auto-dismisses after 3 seconds               */
-/* ------------------------------------------------------------------ */
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.innerHTML = `
-        <div class="notification-content">
-            <span class="notification-icon">
-                ${type === 'warning' ? '⚠️' : type === 'error' ? '❌' : 'ℹ️'}
-            </span>
-            <span class="notification-text">${message}</span>
-        </div>`;
-    document.body.appendChild(notification);
+    const ctx    = canvas.getContext('2d');
+    const COLS   = 40;     // approximate columns of dots
+    const COLOR  = '0, 220, 100';
+    let   dots   = [];
+    let   raf;
 
-    setTimeout(() => {
-        notification.style.opacity   = '1';
-        notification.style.transform = 'translateY(0)';
-    }, 100);
-
-    setTimeout(() => {
-        notification.style.opacity   = '0';
-        notification.style.transform = 'translateY(-100px)';
-        setTimeout(() => document.body.removeChild(notification), 300);
-    }, 3000);
-}
-
-/* ------------------------------------------------------------------ */
-/* Form submission — POSTs the query and displays results              */
-/* ------------------------------------------------------------------ */
-function submitForm(event) {
-    event.preventDefault();
-
-    const searchQuery = document.getElementById('searchQuery').value.trim();
-    if (!searchQuery) {
-        showNotification('Please enter a search query', 'warning');
-        return;
+    function resize() {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+        buildDots();
     }
 
-    /* Brief button press animation */
-    const searchButton = document.querySelector('.search-button');
-    searchButton.style.transform = 'scale(0.95)';
-    setTimeout(() => { searchButton.style.transform = 'scale(1)'; }, 150);
-
-    /* Show loader while waiting for results */
-    const searchResults = document.getElementById('searchResults');
-    searchResults.innerHTML = `
-        <div class="search-loading">
-            <div class="loader-container">
-                <div class="tech-loader">
-                    <div class="loader-ring"></div>
-                    <div class="loader-ring"></div>
-                    <div class="loader-ring"></div>
-                </div>
-                <div class="loading-text">
-                    <span>SCANNING DATABASE...</span>
-                    <div class="loading-dots">
-                        <span>.</span><span>.</span><span>.</span>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-
-    addLoaderStyles();
-
-    fetch('/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery }),
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Network response was not ok');
-        return response.json();
-    })
-    .then(data => {
-        displayResults(data);
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        searchResults.innerHTML = `
-            <div class="error-message">
-                <div class="error-icon">⚠️</div>
-                <div class="error-text">
-                    <strong>SYSTEM ERROR</strong><br>
-                    Connection failed. Please try again.
-                </div>
-            </div>`;
-    });
-}
-
-/* ------------------------------------------------------------------ */
-/* Result rendering — builds one list item per embryo                 */
-/* ------------------------------------------------------------------ */
-function displayResults(data) {
-    const searchResults = document.getElementById('searchResults');
-    searchResults.innerHTML = '';
-
-    if (!data.embryo_list || data.embryo_list.length === 0) {
-        searchResults.innerHTML = `
-            <div class="no-results">
-                <div class="no-results-icon">🔍</div>
-                <div class="no-results-text">
-                    <strong>NO DATA FOUND</strong><br>
-                    Try adjusting your search parameters.
-                </div>
-            </div>`;
-        return;
+    function buildDots() {
+        dots = [];
+        const spacing = canvas.width / COLS;
+        const rows    = Math.ceil(canvas.height / spacing) + 1;
+        for (let r = 0; r <= rows; r++) {
+            for (let c = 0; c <= COLS; c++) {
+                dots.push({
+                    x:     c * spacing,
+                    y:     r * spacing,
+                    phase: Math.random() * Math.PI * 2,
+                    speed: 0.4 + Math.random() * 0.6,
+                });
+            }
+        }
     }
 
-    data.embryo_list.forEach((item, index) => {
-        const listItem = document.createElement('li');
-        listItem.className = 'result-item';
+    function draw(ts) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const t = ts * 0.001;
+        dots.forEach(d => {
+            const alpha = 0.08 + 0.07 * Math.sin(t * d.speed + d.phase);
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, 1.5, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${COLOR}, ${alpha})`;
+            ctx.fill();
+        });
+        raf = requestAnimationFrame(draw);
+    }
 
-        const url    = item.properties.url    || 'URL not available';
-        const resume = item.properties.resume || 'Resume not available';
+    window.addEventListener('resize', resize);
+    resize();
+    raf = requestAnimationFrame(draw);
+})();
 
-        listItem.innerHTML = `
-            <div class="result-header">
-                <div class="result-index">${String(index + 1).padStart(2, '0')}</div>
-                <div class="result-url">
-                    <a href="${url}" target="_blank" class="result-link">${url}</a>
-                </div>
-            </div>
-            <div class="result-content">
-                <p class="result-resume">${resume}</p>
-            </div>
-            <div class="result-footer">
-                <div class="result-status">
-                    <span class="status-badge">ACTIVE</span>
-                </div>
-            </div>`;
+/* ================================================================== */
+/* 2. Clock                                                           */
+/* ================================================================== */
 
-        searchResults.appendChild(listItem);
-
-        /* Stagger the scan-in animation per item */
-        setTimeout(() => scanEffect(listItem), index * 100);
-    });
+function updateClock() {
+    const el = document.getElementById('clock');
+    if (!el) return;
+    const n = new Date();
+    const pad = v => String(v).padStart(2, '0');
+    el.textContent =
+        `${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())} `
+        + `${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
 }
 
-/* ------------------------------------------------------------------ */
-/* Loader styles — injected once into <head>                          */
-/* ------------------------------------------------------------------ */
-function addLoaderStyles() {
-    if (document.getElementById('loader-styles')) return;
+setInterval(updateClock, 1000);
+updateClock();
 
-    const style = document.createElement('style');
-    style.id = 'loader-styles';
-    style.textContent = `
-        .search-loading {
-            padding: 3rem;
-            text-align: center;
-            background: rgba(0, 255, 136, 0.05);
-            border-radius: 10px;
-            border: 1px solid rgba(0, 255, 136, 0.2);
-        }
-        .loader-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1.5rem;
-        }
-        .tech-loader {
-            position: relative;
-            width: 80px;
-            height: 80px;
-        }
-        .loader-ring {
-            position: absolute;
-            border: 3px solid transparent;
-            border-top: 3px solid #00ff88;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        .loader-ring:nth-child(1) { width:80px; height:80px; animation-duration:1s; }
-        .loader-ring:nth-child(2) { width:60px; height:60px; top:10px; left:10px; border-top-color:#0099ff; animation-duration:1.5s; animation-direction:reverse; }
-        .loader-ring:nth-child(3) { width:40px; height:40px; top:20px; left:20px; border-top-color:#ff0099; animation-duration:2s; }
-        .loading-text {
-            font-family: 'Orbitron', monospace;
-            color: #00ff88;
-            font-size: 1.1rem;
-            letter-spacing: 2px;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .loading-dots span { animation: dots 1.5s infinite; }
-        .loading-dots span:nth-child(1) { animation-delay: 0s; }
-        .loading-dots span:nth-child(2) { animation-delay: 0.3s; }
-        .loading-dots span:nth-child(3) { animation-delay: 0.6s; }
-        @keyframes spin  { 0% { transform: rotate(0deg); }   100% { transform: rotate(360deg); } }
-        @keyframes dots  { 0%, 80%, 100% { opacity: 0; }     40%  { opacity: 1; } }
+/* ================================================================== */
+/* 3. Header scroll-shadow                                            */
+/* ================================================================== */
 
-        /* Result item card */
-        .result-item {
-            background: linear-gradient(135deg, rgba(0,255,136,0.1), rgba(0,153,255,0.1));
-            border: 1px solid rgba(0,255,136,0.3);
-            border-radius: 12px;
-            margin: 1rem 0;
-            padding: 1.5rem;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        .result-item::before {
-            content: '';
-            position: absolute;
-            top: 0; left: -100%;
-            width: 100%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(0,255,136,0.1), transparent);
-            transition: left 0.5s ease;
-        }
-        .result-item:hover::before { left: 100%; }
-        .result-item:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0,255,136,0.2);
-            border-color: #00ff88;
-        }
-        .result-header { display:flex; align-items:center; gap:1rem; margin-bottom:1rem; }
-        .result-index {
-            background: linear-gradient(45deg, #00ff88, #0099ff);
-            color: #000;
-            font-weight: bold;
-            padding: 0.3rem 0.8rem;
-            border-radius: 6px;
-            font-family: 'Orbitron', monospace;
-            font-size: 0.9rem;
-        }
-        .result-url  { flex: 1; }
-        .result-link { color:#0099ff; text-decoration:none; font-weight:600; transition:all 0.3s ease; font-size:1.1rem; }
-        .result-link:hover { color:#00ff88; text-shadow:0 0 8px rgba(0,255,136,0.5); }
-        .result-content { margin: 1rem 0; }
-        .result-resume  { color: #00ff88; line-height: 1.6; font-size: 1rem; }
-        .result-footer  { display:flex; justify-content:flex-end; margin-top:1rem; }
-        .status-badge {
-            background: rgba(0,255,136,0.2);
-            color: #00ff88;
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            border: 1px solid rgba(0,255,136,0.3);
-        }
-        .error-message, .no-results {
-            text-align: center;
-            padding: 3rem;
-            background: rgba(255,68,68,0.1);
-            border: 1px solid rgba(255,68,68,0.3);
-            border-radius: 10px;
-            color: #ff4444;
-        }
-        .no-results {
-            background: rgba(255,170,0,0.1);
-            border-color: rgba(255,170,0,0.3);
-            color: #ffaa00;
-        }
-        .error-icon, .no-results-icon { font-size:3rem; margin-bottom:1rem; }
+window.addEventListener('scroll', () => {
+    document.getElementById('app-header')
+        .classList.toggle('scrolled', window.scrollY > 8);
+}, { passive: true });
 
-        /* Notification banner */
-        .notification {
-            position: fixed;
-            top: 20px; right: 20px;
-            z-index: 1000;
-            opacity: 0;
-            transform: translateY(-100px);
-            transition: all 0.3s ease;
-        }
-        .notification-content {
-            background: rgba(0,0,0,0.9);
-            border: 2px solid #00ff88;
-            border-radius: 10px;
-            padding: 1rem 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            backdrop-filter: blur(10px);
-        }
-        .notification.warning .notification-content { border-color: #ffaa00; }
-        .notification.error   .notification-content { border-color: #ff4444; }
-        .notification-text               { color: #00ff88; font-weight: 500; }
-        .notification.warning .notification-text { color: #ffaa00; }
-        .notification.error   .notification-text { color: #ff4444; }
+/* ================================================================== */
+/* 4. Agent count in footer (polling /registry)                       */
+/* ================================================================== */
+
+async function refreshAgentCount() {
+    try {
+        const r = await fetch('http://localhost:8080/registry');
+        if (!r.ok) return;
+        const data  = await r.json();
+        const count = (data.agents || []).length;
+        const el    = document.getElementById('footer-agent-count');
+        if (el) el.textContent = `${count} agent${count !== 1 ? 's' : ''} connected`;
+    } catch (_) {
+        /* disco unreachable — footer stays as-is */
+    }
+}
+
+refreshAgentCount();
+setInterval(refreshAgentCount, 15000);
+
+/* ================================================================== */
+/* 5. Textarea auto-resize                                            */
+/* ================================================================== */
+
+const queryInput = document.getElementById('query-input');
+
+queryInput.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+/* ================================================================== */
+/* 6. Submit logic                                                    */
+/* ================================================================== */
+
+queryInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitQuery();
+    }
+});
+
+document.getElementById('send-btn').addEventListener('click', submitQuery);
+
+/**
+ * Reads the textarea value, POSTs to /query, and renders the result.
+ */
+async function submitQuery() {
+    const query = queryInput.value.trim();
+    if (!query) return;
+
+    const btn        = document.getElementById('send-btn');
+    const metaStatus = document.getElementById('meta-status');
+    const results    = document.getElementById('results');
+    const emptyState = document.getElementById('empty-state');
+
+    // UI: loading state
+    btn.classList.add('loading');
+    btn.disabled = true;
+    metaStatus.className = 'meta-status';
+    metaStatus.textContent = 'querying agents…';
+
+    // Hide empty state, show skeleton
+    emptyState.hidden = true;
+    results.hidden    = false;
+    results.innerHTML = renderSkeleton();
+
+    try {
+        const resp = await fetch('/query', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ query }),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const data = await resp.json();
+        results.innerHTML = renderResponse(data);
+        metaStatus.textContent = '';
+
+        // Scroll results into view on mobile
+        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    } catch (err) {
+        console.error('[emquest] Query failed:', err);
+        results.innerHTML = renderError(err.message);
+        metaStatus.className  = 'meta-status error';
+        metaStatus.textContent = 'request failed';
+    } finally {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+    }
+}
+
+/* ================================================================== */
+/* 7. Renderers                                                       */
+/* ================================================================== */
+
+/**
+ * Renders the full structured response: answer card + optional items.
+ *
+ * Contract:
+ *   { answer: string, items?: Array<{ label, value, url? }> }
+ *
+ * This renderer is intentionally generic — it does not know about
+ * agent types.  The LLM (queen) decides what goes in answer / items.
+ *
+ * @param {Object} data - The parsed JSON response from /query.
+ * @returns {string} HTML string.
+ */
+function renderResponse(data) {
+    const parts = [];
+
+    // ── Answer card ─────────────────────────────────────────────
+    if (data.answer) {
+        parts.push(`
+            <div class="answer-card">
+                <div class="answer-label">SYNTHESIS</div>
+                <p class="answer-text">${escapeHtml(data.answer)}</p>
+            </div>
+        `);
+    }
+
+    // ── Items section ────────────────────────────────────────────
+    const items = data.items;
+    if (Array.isArray(items) && items.length > 0) {
+        const itemsHtml = items.map((item, i) => renderItem(item, i)).join('');
+        parts.push(`
+            <div class="items-section">
+                <div class="items-label">RESULTS</div>
+                <ul class="items-list">${itemsHtml}</ul>
+            </div>
+        `);
+    }
+
+    // ── Fallback if both are absent ──────────────────────────────
+    if (parts.length === 0) {
+        parts.push(renderError('No results returned.'));
+    }
+
+    return parts.join('');
+}
+
+/**
+ * Renders a single result item.
+ *
+ * Each item has: label (required), value (optional), url (optional).
+ * When url is present, the label becomes a clickable link.
+ *
+ * @param {{ label: string, value?: string, url?: string }} item
+ * @param {number} index - Zero-based index for display number.
+ * @returns {string} HTML string for a <li>.
+ */
+function renderItem(item, index) {
+    const num   = String(index + 1).padStart(2, '0');
+    const label = item.label || '';
+    const value = item.value || '';
+    const url   = item.url && item.url !== 'null' ? item.url : null;
+
+    // Label is a link when url is present
+    const labelHtml = url
+        ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener"
+               class="item-label">${escapeHtml(label)}</a>`
+        : `<span class="item-label">${escapeHtml(label)}</span>`;
+
+    const arrowHtml = url
+        ? `<span class="item-arrow" aria-hidden="true">↗</span>`
+        : '';
+
+    return `
+        <li class="item-card">
+            <span class="item-index">${escapeHtml(num)}</span>
+            <div class="item-body">
+                ${labelHtml}
+                ${value ? `<p class="item-value">${escapeHtml(value)}</p>` : ''}
+            </div>
+            ${arrowHtml}
+        </li>
     `;
-    document.head.appendChild(style);
 }
 
-/* ------------------------------------------------------------------ */
-/* Keyboard shortcuts                                                  */
-/*   Ctrl+Enter — submit the form                                     */
-/*   Escape     — clear the search input                              */
-/* ------------------------------------------------------------------ */
-document.addEventListener('keydown', function(event) {
-    if (event.ctrlKey && event.key === 'Enter') {
-        event.preventDefault();
-        const form = document.getElementById('searchForm');
-        if (form) submitForm(new Event('submit'));
-    }
-    if (event.key === 'Escape') {
-        const input = document.getElementById('searchQuery');
-        if (input && input === document.activeElement) input.value = '';
-    }
-});
+/**
+ * Renders a loading skeleton (shown while the query is in flight).
+ * @returns {string} HTML string.
+ */
+function renderSkeleton() {
+    return `
+        <div class="skeleton">
+            <div class="skeleton-answer">
+                <div class="skeleton-line long"></div>
+                <div class="skeleton-line full"></div>
+                <div class="skeleton-line short"></div>
+            </div>
+            <div class="skeleton-answer">
+                <div class="skeleton-line full"></div>
+                <div class="skeleton-line long"></div>
+            </div>
+        </div>
+    `;
+}
 
-/* ------------------------------------------------------------------ */
-/* DOMContentLoaded — input focus effects + timestamp                 */
-/* ------------------------------------------------------------------ */
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('searchQuery');
-    if (searchInput) {
-        searchInput.addEventListener('focus', function() {
-            this.parentElement.style.boxShadow = '0 0 20px rgba(0, 255, 136, 0.3)';
-        });
-        searchInput.addEventListener('blur', function() {
-            this.parentElement.style.boxShadow = 'none';
-        });
-    }
+/**
+ * Renders an error card.
+ * @param {string} message
+ * @returns {string} HTML string.
+ */
+function renderError(message) {
+    return `
+        <div class="error-card">
+            <span class="error-icon">⚠</span>
+            <span>${escapeHtml(message || 'An unexpected error occurred.')}</span>
+        </div>
+    `;
+}
 
-    updateTimestamp();
-    setInterval(updateTimestamp, 1000);
-});
+/* ================================================================== */
+/* 8. Utilities                                                       */
+/* ================================================================== */
 
-/* Form submit listener */
-document.getElementById('searchForm').addEventListener('submit', submitForm);
+/**
+ * Escapes a string for safe insertion into HTML text content.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * Escapes a string for safe use in an HTML attribute value.
+ * Only allows http/https URLs; strips everything else.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeAttr(str) {
+    if (!str) return '#';
+    const s = String(str).trim();
+    // Reject non-http(s) schemes to prevent javascript: injection
+    if (!/^https?:\/\//i.test(s)) return '#';
+    return s.replace(/"/g, '%22');
+}

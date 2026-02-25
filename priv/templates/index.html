@@ -7,83 +7,88 @@
     <link rel="stylesheet" href="/static/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Decorative background layers -->
-    <div class="background-grid"></div>
-    <div class="background-particles"></div>
 
-    <!-- Header -->
-    <header class="tech-header">
-        <div class="header-content">
-            <div class="logo-container">
-                <div class="logo-pulse"></div>
-                <h1 class="logo-text">EMERGENCE</h1>
-                <div class="logo-subtitle">DISTRIBUTED SEARCH</div>
-            </div>
-            <div class="system-status">
-                <div class="status-indicator">
-                    <div class="status-dot"></div>
-                    <span>SYSTEM ONLINE</span>
+    <!-- Ambient background -->
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- ── Sticky header with search ─────────────────────────────── -->
+    <header class="app-header" id="app-header">
+        <div class="header-inner">
+
+            <!-- Logo -->
+            <div class="logo">
+                <div class="logo-mark">
+                    <span class="logo-dot"></span>
+                    <span class="logo-dot"></span>
+                    <span class="logo-dot"></span>
                 </div>
-                <div class="timestamp" id="timestamp"></div>
+                <span class="logo-name">EMERGENCE</span>
+                <span class="logo-tag">distributed</span>
             </div>
-        </div>
-    </header>
 
-    <!-- Main content -->
-    <div class="container">
-        <!-- Search bar -->
-        <div class="search-interface">
-            <div class="search-label">QUERY INPUT</div>
-            <form id="searchForm" class="search-form">
-                <div class="search-wrapper">
-                    <input
-                        type="text"
-                        id="searchQuery"
-                        class="search-input"
-                        name="search_query"
-                        placeholder="Enter search query..."
-                        autocomplete="off">
-                    <button type="submit" class="search-button">
-                        <div class="button-glow"></div>
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-                            <path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/>
+            <!-- Search area — textarea + button -->
+            <div class="search-zone">
+                <div class="search-box" id="search-box">
+                    <textarea
+                        id="query-input"
+                        class="query-input"
+                        placeholder="Ask anything — search, DNS, knowledge..."
+                        rows="1"
+                        autocomplete="off"
+                        spellcheck="false"
+                    ></textarea>
+                    <button class="send-btn" id="send-btn" aria-label="Send">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                         </svg>
                     </button>
                 </div>
-            </form>
-        </div>
-
-        <!-- Results panel -->
-        <div class="results-panel">
-            <div class="panel-header">
-                <h3>DATA STREAM</h3>
-                <div class="panel-controls">
-                    <div class="control-dot red"></div>
-                    <div class="control-dot yellow"></div>
-                    <div class="control-dot green"></div>
+                <!-- Status line below search box -->
+                <div class="search-meta" id="search-meta">
+                    <span class="meta-hint">↵ send &nbsp;·&nbsp; shift+↵ newline</span>
+                    <span class="meta-status" id="meta-status"></span>
                 </div>
             </div>
-            <div class="panel-content">
-                <div id="searchResults" class="search-results"></div>
-            </div>
-        </div>
-    </div>
 
-    <!-- Footer -->
-    <footer class="tech-footer">
-        <div class="footer-content">
-            <div class="system-info">
-                <span>EMERGENCE v2.1.0</span>
-                <span class="separator">|</span>
-                <span>DISTRIBUTED SEARCH ACTIVE</span>
+            <!-- System status -->
+            <div class="sys-status">
+                <span class="pulse-dot"></span>
+                <span id="clock" class="clock"></span>
             </div>
-            <div>
-                <span>EST. 2024</span>
-            </div>
+
         </div>
+    </header>
+
+    <!-- ── Main content ───────────────────────────────────────────── -->
+    <main class="main" id="main">
+
+        <!-- Empty state -->
+        <div class="empty-state" id="empty-state">
+            <div class="empty-grid">
+                <div class="empty-cell">web search</div>
+                <div class="empty-cell">DNS lookup</div>
+                <div class="empty-cell">knowledge</div>
+                <div class="empty-cell">synthesis</div>
+            </div>
+            <p class="empty-hint">All agents stand by.</p>
+        </div>
+
+        <!-- Results area — populated by JS -->
+        <div class="results" id="results" hidden></div>
+
+    </main>
+
+    <!-- ── Footer ────────────────────────────────────────────────── -->
+    <footer class="app-footer">
+        <span class="footer-name">EMERGENCE</span>
+        <span class="footer-sep">·</span>
+        <span id="footer-agent-count" class="footer-info">agents loading…</span>
+        <span class="footer-sep">·</span>
+        <span class="footer-info">v2.2.0</span>
     </footer>
 
     <script src="/static/emergence.js"></script>
