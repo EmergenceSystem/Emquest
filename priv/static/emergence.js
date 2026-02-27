@@ -1,22 +1,22 @@
 /**
  * emergence.js — Emquest Browser Client (SSE streaming)
  *
- * Reads a Server-Sent Events stream from POST /query.
- * Events:
- *   {type: "status",  message: "..."}  → appended to progress log
- *   {type: "results", items: [...]}    → replaces progress log with results
- *   {type: "error",   message: "..."}  → shows error card
+ * SSE events:
+ *   {type:"status",  message:"..."}          → progress log line
+ *   {type:"item",    sid:N, item:{...}}       → append result card immediately
+ *   {type:"reorder", sids:[N,...],
+ *          scores:{N:0-3,...}}                → reorder + score cards
+ *   {type:"answer",  message:"..."}           → slide-in answer panel
+ *   {type:"error",   message:"..."}           → error card
  *
- * Item rendering is type-aware but fully generic:
- *   item.url present  → web result  (link + resume)
- *   item.ips present  → DNS result  (IP badge list)
- *   neither           → generic     (label + value)
- *
- * score (0-3) from the LLM drives a visual relevance indicator.
+ * Card types (auto-detected from item fields):
+ *   item.url   → web   : title link + url + resume
+ *   item.ips   → dns   : domain + IP badges
+ *   neither    → generic: label + value
  */
 
 /* ================================================================== */
-/* Ambient canvas background                                          */
+/* Ambient canvas                                                     */
 /* ================================================================== */
 (function initCanvas() {
     const canvas = document.getElementById('bg-canvas');
@@ -32,16 +32,18 @@
         dots = [];
         for (let r = 0; r <= rows; r++)
             for (let c = 0; c <= 40; c++)
-                dots.push({ x: c * spacing, y: r * spacing,
-                             phase: Math.random() * Math.PI * 2,
-                             speed: 0.4 + Math.random() * 0.6 });
+                dots.push({
+                    x: c * spacing, y: r * spacing,
+                    phase: Math.random() * Math.PI * 2,
+                    speed: 0.4 + Math.random() * 0.6
+                });
     }
 
     function draw(ts) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const t = ts * 0.001;
         dots.forEach(d => {
-            const a = 0.06 + 0.06 * Math.sin(t * d.speed + d.phase);
+            const a = 0.05 + 0.05 * Math.sin(t * d.speed + d.phase);
             ctx.beginPath();
             ctx.arc(d.x, d.y, 1.5, 0, Math.PI * 2);
             ctx.fillStyle = `rgba(0,220,100,${a})`;
@@ -78,7 +80,7 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 /* ================================================================== */
-/* Agent count (footer)                                               */
+/* Agent count                                                        */
 /* ================================================================== */
 async function refreshAgentCount() {
     try {
@@ -110,6 +112,10 @@ queryInput?.addEventListener('keydown', e => {
 });
 document.getElementById('send-btn')?.addEventListener('click', submitQuery);
 
+/* ── Per-query state ─────────────────────────────────────────────── */
+/** @type {Map<number, HTMLElement>} sid → card element */
+let streamCards = new Map();
+
 async function submitQuery() {
     const query = queryInput?.value.trim();
     if (!query) return;
@@ -118,24 +124,31 @@ async function submitQuery() {
     const results = document.getElementById('results');
     const empty   = document.getElementById('empty-state');
 
+    /* Reset state */
+    streamCards = new Map();
+
     btn.classList.add('loading');
-    btn.disabled = true;
+    btn.disabled   = true;
     empty.hidden   = true;
     results.hidden = false;
 
-    /* Show live progress log */
-    results.innerHTML = `<div class="progress-log" id="progress-log"></div>`;
+    /* Pre-render layout: progress + results list */
+    results.innerHTML = `
+        <div class="progress-log" id="progress-log"></div>
+        <ul class="items-list" id="results-list"></ul>
+    `;
+
+    /* Answer panel: always present, empty until answer arrives */
+    renderAnswerPanel('');
 
     try {
         const resp = await fetch('/query', {
-            method: 'POST',
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query }),
+            body:    JSON.stringify({ query }),
         });
-
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-        /* Read the SSE stream line by line */
         const reader  = resp.body.getReader();
         const decoder = new TextDecoder();
         let   buffer  = '';
@@ -144,162 +157,256 @@ async function submitQuery() {
             const { done, value } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
-            /* SSE events are separated by \n\n */
             const parts = buffer.split('\n\n');
-            buffer = parts.pop();       // keep incomplete tail
+            buffer = parts.pop();
             for (const part of parts) {
                 const line = part.trim();
                 if (line.startsWith('data: ')) {
-                    handleEvent(JSON.parse(line.slice(6)), results);
+                    try {
+                        handleEvent(JSON.parse(line.slice(6)));
+                    } catch (e) {
+                        console.warn('[emquest] parse error', e);
+                    }
                 }
             }
         }
     } catch (err) {
         console.error('[emquest]', err);
-        results.innerHTML = renderError(err.message);
+        const results2 = document.getElementById('results');
+        if (results2) results2.innerHTML = renderError(err.message);
     } finally {
         btn.classList.remove('loading');
         btn.disabled = false;
+
+        /* Fade out progress log after a short delay */
+        const log = document.getElementById('progress-log');
+        if (log) {
+            setTimeout(() => {
+                log.style.transition = 'opacity 0.5s ease';
+                log.style.opacity    = '0';
+                setTimeout(() => log.remove(), 500);
+            }, 1200);
+        }
     }
 }
 
 /* ================================================================== */
 /* SSE event handler                                                  */
 /* ================================================================== */
-
-/**
- * Dispatches an incoming SSE event to the appropriate renderer.
- * @param {{ type: string, message?: string, items?: Array }} event
- * @param {HTMLElement} container
- */
-function handleEvent(event, container) {
+function handleEvent(event) {
     switch (event.type) {
 
+        /* ── Progress line ─────────────────────────────────────── */
         case 'status': {
-            /* Append a line to the live progress log */
             const log = document.getElementById('progress-log');
             if (!log) return;
             const line = document.createElement('div');
             line.className = 'progress-line';
-            line.innerHTML = `<span class="progress-arrow">›</span> ${escHtml(event.message)}`;
+            line.innerHTML = `<span class="progress-arrow">›</span>${escHtml(event.message)}`;
             log.appendChild(line);
             line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             break;
         }
 
+        /* ── Stream one result card immediately ────────────────── */
+        case 'item': {
+            const list = document.getElementById('results-list');
+            if (!list) return;
+            const card = buildCard(event.item, event.sid, streamCards.size);
+            list.appendChild(card);
+            streamCards.set(event.sid, card);
+            break;
+        }
+
+        /* ── Reorder + score cards after ranking ───────────────── */
+        case 'reorder': {
+            const list   = document.getElementById('results-list');
+            const sids   = event.sids   || [];
+            const scores = event.scores || {};
+
+            /* Safety: empty sids = LLM failed, keep cards as-is */
+            if (sids.length === 0) break;
+
+            /* Hide deduped items */
+            streamCards.forEach((card, sid) => {
+                if (!sids.includes(sid)) {
+                    card.classList.add('card-removed');
+                    setTimeout(() => card.remove(), 350);
+                }
+            });
+
+            /* Reorder DOM + update score accent, re-number */
+            sids.forEach((sid, pos) => {
+                const card = streamCards.get(sid);
+                if (!card || !list) return;
+
+                /* Keys come as strings from JSON (integer_to_binary in Erlang) */
+                const score = scores[String(sid)] ?? 0;
+                card.dataset.score = score;
+                card.className = card.className.replace(/\bscore-\d\b/g, '').trim();
+                card.classList.add(`score-${score}`);
+
+                /* Update index number */
+                const idx = card.querySelector('.item-index');
+                if (idx) idx.textContent = String(pos + 1).padStart(2, '0');
+
+                list.appendChild(card); /* move to end in ranked order */
+            });
+            break;
+        }
+
+        /* ── AI answer — just fill the pre-rendered panel ──────── */
         case 'answer': {
-            /* Show the LLM answer card above results (created lazily) */
-            let card = document.getElementById('answer-card');
-            if (!card) {
-                card = document.createElement('div');
-                card.id        = 'answer-card';
-                card.className = 'answer-card';
-                card.innerHTML = `<div class="answer-label">ANSWER</div>
-                                  <p class="answer-text" id="answer-text"></p>`;
-                container.innerHTML = '';
-                container.appendChild(card);
-                /* Placeholder for results that will follow */
-                const list = document.createElement('div');
-                list.id = 'results-placeholder';
-                container.appendChild(list);
-            }
-            document.getElementById('answer-text').textContent = event.message;
-            break;
-        }
-
-        case 'results': {
-            /* Inject results — either into placeholder or replace everything */
-            const placeholder = document.getElementById('results-placeholder');
-            const html = renderResults(event.items || []);
-            if (placeholder) {
-                placeholder.outerHTML = html;
-            } else {
-                container.innerHTML = html;
+            const el = document.getElementById('answer-panel-text');
+            if (el) {
+                el.textContent = event.message;
+                el.classList.add('has-content');
             }
             break;
         }
 
+        /* ── Error ─────────────────────────────────────────────── */
         case 'error': {
-            container.innerHTML = renderError(event.message);
+            const results = document.getElementById('results');
+            if (results) results.innerHTML = renderError(event.message);
             break;
         }
     }
 }
 
 /* ================================================================== */
-/* Renderers                                                          */
+/* Card builder                                                        */
 /* ================================================================== */
 
 /**
- * Renders the full results list.
- * Items are already sorted by queen (most relevant first, score 3→0).
- * Nothing is hidden.
+ * Builds a result <li> card element.
+ * @param {object} item  - normalised item from server
+ * @param {number} sid   - stream id
+ * @param {number} pos   - visual position index
  */
-function renderResults(items) {
-    if (!items.length) return renderError('No results found.');
+function buildCard(item, sid, pos) {
+    const li = document.createElement('li');
+    li.className = `item-card score-${item.score ?? 0}`;
+    li.dataset.sid = sid;
+    li.style.animationDelay = `${Math.min(pos * 50, 400)}ms`;
 
-    const itemsHtml = items.map((item, i) => renderItem(item, i)).join('');
-    return `<ul class="items-list">${itemsHtml}</ul>`;
+    li.innerHTML = buildCardBody(item, pos);
+
+    /* Clickable whole card for web results */
+    if (item.url) {
+        const url = safeUrl(item.url);
+        if (url) {
+            li.classList.add('item-card--link');
+            li.addEventListener('click', e => {
+                if (e.target.closest('a')) return; /* let native link work */
+                window.open(url, '_blank', 'noopener');
+            });
+        }
+    }
+
+    return li;
 }
 
-/**
- * Renders one result item.
- *
- * Type detection:
- *   item.url   → web result  → title as link + resume text
- *   item.ips   → DNS result  → IP badges
- *   neither    → generic     → label + value
- *
- * score (0-3) drives the left-border accent colour.
- */
-function renderItem(item, index) {
-    const num   = String(index + 1).padStart(2, '0');
-    const score = item.score ?? 0;
-    const scoreClass = ['score-0', 'score-1', 'score-2', 'score-3'][score] ?? 'score-0';
-
-    let bodyHtml = '';
+function buildCardBody(item, pos) {
+    const num = String(pos + 1).padStart(2, '0');
+    let body = '';
 
     if (item.url) {
-        /* ── Web result ─────────────────────────────────────────── */
-        bodyHtml = `
-            <a href="${escAttr(item.url)}" target="_blank" rel="noopener"
-               class="item-label item-link">${escHtml(item.label)}</a>
-            <p class="item-url-display">${escHtml(item.url)}</p>
-            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
-        `;
+        /* ── Web result ────────────────────────────────────────── */
+        const url  = safeUrl(item.url) || '#';
+        const hasTitle = item.label && item.label !== 'Result' && item.label !== item.url
+                         && item.label !== hostnameOf(item.url);
+        if (hasTitle) {
+            /* title + url + resume */
+            body = `
+                <div class="item-web">
+                    <a href="${escAttr(url)}" target="_blank" rel="noopener"
+                       class="item-title">${escHtml(item.label)}</a>
+                    <span class="item-url">${escHtml(item.url)}</span>
+                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                </div>
+                <span class="item-arrow">↗</span>
+            `;
+        } else {
+            /* url as main element + resume */
+            body = `
+                <div class="item-web">
+                    <a href="${escAttr(url)}" target="_blank" rel="noopener"
+                       class="item-url item-url--hero">${escHtml(item.url)}</a>
+                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                </div>
+                <span class="item-arrow">↗</span>
+            `;
+        }
     } else if (Array.isArray(item.ips) && item.ips.length) {
-        /* ── DNS result ─────────────────────────────────────────── */
-        const ipBadges = item.ips
+        /* ── DNS result ────────────────────────────────────────── */
+        const badges = item.ips
             .map(ip => `<span class="ip-badge">${escHtml(String(ip))}</span>`)
             .join('');
-        bodyHtml = `
-            <span class="item-label">${escHtml(item.label)}</span>
-            <div class="ip-list">${ipBadges}</div>
-            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
+        body = `
+            <div class="item-dns">
+                <div class="item-dns-header">
+                    <span class="item-domain">${escHtml(item.label)}</span>
+                    <span class="dns-badge">DNS</span>
+                </div>
+                <div class="ip-list">${badges}</div>
+                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+            </div>
         `;
     } else {
-        /* ── Generic result ─────────────────────────────────────── */
-        bodyHtml = `
-            <span class="item-label">${escHtml(item.label)}</span>
-            ${item.value ? `<p class="item-value">${escHtml(item.value)}</p>` : ''}
+        /* ── Generic ───────────────────────────────────────────── */
+        const label = (item.label && item.label !== 'Result') ? item.label : null;
+        body = `
+            <div class="item-generic">
+                ${label ? `<span class="item-title">${escHtml(label)}</span>` : ''}
+                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+            </div>
         `;
     }
 
-    /* Whole card is clickable when a URL is present */
-    const clickable = item.url ? `onclick="window.open('${escAttr(item.url)}','_blank','noopener')"
-                                  style="cursor:pointer"` : '';
-
     return `
-        <li class="item-card ${scoreClass}"
-            style="animation-delay:${index * 60}ms"
-            ${clickable}>
-            <span class="item-index">${escHtml(num)}</span>
-            <div class="item-body">${bodyHtml}</div>
-            ${item.url ? `<span class="item-arrow">↗</span>` : ''}
-        </li>
+        <span class="item-index">${escHtml(num)}</span>
+        <div class="item-body">${body}</div>
     `;
 }
 
+/* ================================================================== */
+/* Answer panel                                                       */
+/* ================================================================== */
+
+/**
+ * Renders the answer panel immediately with empty content.
+ * The panel is always visible — text is filled later when the answer arrives.
+ */
+function renderAnswerPanel(text) {
+    let panel = document.getElementById('answer-panel');
+    if (!panel) {
+        panel = document.createElement('aside');
+        panel.id        = 'answer-panel';
+        panel.className = 'answer-panel';
+        panel.innerHTML = `
+            <div class="answer-panel__header">
+                <span class="answer-panel__label">AI SYNTHESIS</span>
+            </div>
+            <p class="answer-panel__text" id="answer-panel-text">${escHtml(text)}</p>
+        `;
+        document.body.appendChild(panel);
+    } else {
+        const el = document.getElementById('answer-panel-text');
+        if (el) { el.textContent = text; el.classList.remove('has-content'); }
+    }
+    document.getElementById('main')?.classList.add('main--panel-open');
+}
+
+function hideAnswerPanel() {
+    const panel = document.getElementById('answer-panel');
+    if (panel) panel.remove();
+    document.getElementById('main')?.classList.remove('main--panel-open');
+}
+
+/* ================================================================== */
+/* Error                                                              */
+/* ================================================================== */
 function renderError(msg) {
     return `
         <div class="error-card">
@@ -314,12 +421,16 @@ function renderError(msg) {
 function escHtml(s) {
     if (s == null) return '';
     return String(s)
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-        .replace(/'/g,'&#39;');
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
-function escAttr(s) {
-    if (!s) return '#';
+function escAttr(s) { return s ? String(s).replace(/"/g, '%22') : '#'; }
+function safeUrl(s) {
+    if (!s) return null;
     const t = String(s).trim();
-    return /^https?:\/\//i.test(t) ? t.replace(/"/g,'%22') : '#';
+    return /^https?:\/\//i.test(t) ? t : null;
+}
+function hostnameOf(url) {
+    try { return new URL(url).hostname; } catch (_) { return url; }
 }

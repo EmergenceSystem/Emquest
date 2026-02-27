@@ -7,21 +7,14 @@
 %%%
 %%% === SSE event types ===
 %%%
-%%% Every event is a line:  data: <json>\n\n
-%%%
-%%%   {"type": "status",  "message": "Expanding query..."}
-%%%   {"type": "results", "items":   [...]}
+%%%   {"type": "status",  "message": "..."}
+%%%   {"type": "item",    "item": {...}, "sid": N}  ← streamed immediately
+%%%   {"type": "reorder", "sids": [N,...], "scores": {N: 0-3,...}}
+%%%   {"type": "answer",  "message": "..."}         ← LLM synthesis
 %%%   {"type": "error",   "message": "..."}
 %%%
-%%% The client renders status events as a live progress log and
-%%% replaces it with the results list when the "results" event arrives.
-%%%
-%%% === Item shape (inside "results") ===
-%%%
-%%%   { "label": "...", "value": "...",
-%%%     "url":   "https://..."    (web result — optional)
-%%%     "ips":   ["1.2.3.4"]     (DNS result — optional)
-%%%     "score": 0-3 }           (LLM relevance rank)
+%%% Items are streamed one-by-one as each agent responds, then
+%%% re-ordered and scored once ranking is complete.
 %%%
 %%% @author Steve Roques
 %%% @end
@@ -59,7 +52,6 @@ init(Req0, query) ->
 %%====================================================================
 
 handle_query(RawBody, Req0) ->
-    %% Open SSE stream
     Req = cowboy_req:stream_reply(200, #{
         <<"content-type">>  => <<"text/event-stream">>,
         <<"cache-control">> => <<"no-cache">>,
@@ -77,7 +69,7 @@ handle_query(RawBody, Req0) ->
     end.
 
 run_pipeline(Query, Req) ->
-    %% Step 1 — expand query into sub-queries via LLM
+    %% Step 1 — expand query into sub-queries
     sse(Req, status, <<"Expanding query...">>),
     SubQueries = queen:expand(Query),
     sse(Req, status, iolist_to_binary([
@@ -85,7 +77,7 @@ run_pipeline(Query, Req) ->
         integer_to_binary(length(SubQueries)), " sub-query(ies)..."
     ])),
 
-    %% Step 2 — fan-out to disco in parallel, stream progress
+    %% Step 2 — fan-out to disco in parallel
     Parent = self(),
     Pids = [spawn(fun() ->
                 Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
@@ -98,19 +90,54 @@ run_pipeline(Query, Req) ->
                 end
              end) || Q <- SubQueries],
 
-    AllItems = collect_disco(Pids, Req, []),
+    %% Collect results, streaming each item immediately as it arrives
+    %% Returns list of {Sid, RawItem} tagged with stream ids
+    TaggedItems = collect_disco_streaming(Pids, Req, [], 0),
 
-    %% Step 3 — deduplicate by URL (first occurrence wins)
-    Deduped = deduplicate(AllItems),
+    %% Step 3 — deduplicate by URL (first occurrence wins), keep sids
+    DedupedTagged = deduplicate_tagged(TaggedItems),
+    RawItems      = [Item || {_Sid, Item} <- DedupedTagged],
+
     sse(Req, status, iolist_to_binary([
-        integer_to_binary(length(Deduped)),
+        integer_to_binary(length(DedupedTagged)),
         " unique result(s). Ranking with LLM..."
     ])),
 
-    %% Step 4 — LLM ranks (sorts), never hides results
-    Ranked = queen:rank(Query, Deduped),
+    %% Step 4 — rank; result is the same list reordered with scores
+    Ranked = queen:rank(Query, RawItems),
 
-    %% Step 5 — LLM synthesises a prose answer from the top results
+    %% Rebuild {Sid, ScoredItem} in ranked order
+    %% Match by original position in DedupedTagged
+    SidArr = list_to_tuple([Sid || {Sid, _} <- DedupedTagged]),
+    RankedSids = lists:map(fun(ScoredItem) ->
+        %% Find which position this item occupies in DedupedTagged
+        %% queen:rank preserves items; match by identity (same map ref)
+        Idx = find_item_index(ScoredItem, RawItems, 0),
+        Sid = case Idx >= 0 andalso Idx < tuple_size(SidArr) of
+            true  -> element(Idx + 1, SidArr);
+            false -> -1
+        end,
+        Score = maps:get(<<"score">>, ScoredItem, 0),
+        {Sid, Score}
+    end, Ranked),
+
+    ValidSids   = [S || {S, _} <- RankedSids, S =/= -1],
+    %% JSON object keys must be binaries — convert integer sids to binary strings.
+    ScoresMap   = maps:from_list([{integer_to_binary(S), Sc}
+                                  || {S, Sc} <- RankedSids, S =/= -1]),
+
+    %% Only send reorder if ranking produced a full valid result.
+    %% An empty or partial ValidSids means the LLM failed — keep items as-is.
+    AllSids = [S || {S, _} <- DedupedTagged],
+    case length(ValidSids) > 0 andalso
+         lists:sort(ValidSids) =:= lists:sort(AllSids) of
+        true  -> sse_reorder(Req, ValidSids, ScoresMap);
+        false ->
+            io:format("[emquest] Skipping reorder: ranked ~p / ~p items~n",
+                      [length(ValidSids), length(AllSids)])
+    end,
+
+    %% Step 5 — synthesise prose answer
     sse(Req, status, <<"Generating answer...">>),
     Answer = queen:synthesize(Query, Ranked),
     case Answer of
@@ -118,77 +145,85 @@ run_pipeline(Query, Req) ->
         _    -> sse(Req, answer, Answer)
     end,
 
-    %% Step 6 — normalise items for the client and stream
-    ClientItems = [normalise_item(Item) || Item <- Ranked],
-    sse_results(Req, ClientItems).
+    cowboy_req:stream_body(<<>>, fin, Req).
 
 %%====================================================================
-%% Disco collection
+%% Streaming disco collection
 %%====================================================================
 
-collect_disco([], _Req, Acc) -> Acc;
-collect_disco([Pid | Rest], Req, Acc) ->
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Collects agent results, streaming each normalised item immediately.
+%%
+%% Returns `[{Sid :: integer(), RawItem :: map()}]' so the caller can
+%% match the stream ids back to their original items after ranking.
+%% @end
+%%--------------------------------------------------------------------
+collect_disco_streaming([], _Req, Acc, _Counter) ->
+    lists:reverse(Acc);
+collect_disco_streaming([Pid | Rest], Req, Acc, Counter) ->
     receive
         {disco_result, Pid, SubQ, Items} ->
             sse(Req, status, iolist_to_binary([
                 "Got ", integer_to_binary(length(Items)),
                 " result(s) for: \"", SubQ, "\""
             ])),
-            collect_disco(Rest, Req, Acc ++ Items)
+            {NewAcc, NewCounter} = lists:foldl(fun(Item, {A, Ctr}) ->
+                NormItem = normalise_item(Item),
+                sse_item(Req, Ctr, NormItem),
+                {[{Ctr, Item} | A], Ctr + 1}
+            end, {Acc, Counter}, Items),
+            collect_disco_streaming(Rest, Req, NewAcc, NewCounter)
     after 8000 ->
         logger:warning("[emquest] disco timeout pid ~p", [Pid]),
-        collect_disco(Rest, Req, Acc)
+        collect_disco_streaming(Rest, Req, Acc, Counter)
     end.
 
 %%====================================================================
-%% Deduplication
+%% Deduplication (tagged)
 %%====================================================================
 
-deduplicate(Items) ->
-    {Uniq, _} = lists:foldl(fun(Item, {Acc, Seen}) ->
+deduplicate_tagged(TaggedItems) ->
+    {Uniq, _} = lists:foldl(fun({Sid, Item}, {Acc, Seen}) ->
         Props = maps:get(<<"properties">>, Item, #{}),
         Url   = maps:get(<<"url">>, Props, <<>>),
-        case Url =:= <<>> orelse sets:is_element(Url, Seen) of
-            true  -> {Acc, Seen};
-            false -> {[Item | Acc], sets:add_element(Url, Seen)}
+        case Url of
+            %% No URL (DNS, generic…) — always keep, nothing to deduplicate on.
+            <<>> ->
+                {[{Sid, Item} | Acc], Seen};
+            %% Has a URL — deduplicate by it.
+            _ ->
+                case sets:is_element(Url, Seen) of
+                    true  -> {Acc, Seen};
+                    false -> {[{Sid, Item} | Acc], sets:add_element(Url, Seen)}
+                end
         end
-    end, {[], sets:new()}, Items),
+    end, {[], sets:new()}, lists:reverse(TaggedItems)),
     lists:reverse(Uniq).
 
 %%====================================================================
 %% Item normalisation
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc Flattens an embryo map into a client-ready item.
-%%
-%% Type detection (no hidden results — everything goes through):
-%%   url present  → web result  → render as link + resume
-%%   ips present  → DNS result  → render as IP badge list
-%%   neither      → generic     → render as label + value
-%%
-%% score (0-3) is injected by queen:rank/2 and forwarded as-is.
-%% @end
-%%--------------------------------------------------------------------
 normalise_item(Item) ->
     Props = maps:get(<<"properties">>, Item, Item),
     Score = maps:get(<<"score">>, Item, 0),
+    Type  = maps:get(<<"type">>, Item, <<"generic">>),
 
-    Url   = first_defined(Props, [<<"url">>],                      null),
-    Label = first_defined(Props, [<<"title">>,<<"label">>,
-                                  <<"domain">>],                   <<"Result">>),
-    Value = first_defined(Props, [<<"resume">>,<<"value">>,
-                                  <<"description">>],              <<>>),
-    Ips   = first_defined(Props, [<<"ips">>],                      null),
+    Url   = first_defined(Props, [<<"url">>],                       null),
+    Label = first_defined(Props, [<<"title">>, <<"label">>,
+                                   <<"domain">>],                   <<"Result">>),
+    Value = first_defined(Props, [<<"resume">>, <<"value">>,
+                                   <<"description">>],              <<>>),
+    Ips   = first_defined(Props, [<<"ips">>],                       null),
 
     Base = #{<<"label">> => Label, <<"value">> => Value,
-             <<"score">> => Score},
+             <<"score">> => Score, <<"type">>  => Type},
 
     case {Url, Ips} of
-        {null, [_|_]} -> Base#{<<"ips">>  => Ips};   %% DNS
-        {null, _}     -> Base;                         %% generic
-        _             -> Base#{<<"url">>  => Url}      %% web
+        {null, [_|_]} -> Base#{<<"ips">>  => Ips};
+        {null, _}     -> Base;
+        _             -> Base#{<<"url">>  => Url}
     end.
 
 first_defined(_Props, [], Default) -> Default;
@@ -197,6 +232,21 @@ first_defined(Props, [Key | Rest], Default) ->
         undefined -> first_defined(Props, Rest, Default);
         null      -> first_defined(Props, Rest, Default);
         V         -> V
+    end.
+
+%%====================================================================
+%% Helpers
+%%====================================================================
+
+%% Find the 0-based index of Item in List by map equality (ignoring score).
+find_item_index(_Item, [], _Idx)      -> -1;
+find_item_index(Item, [H | T], Idx)  ->
+    %% Compare without the injected score field
+    A = maps:remove(<<"score">>, Item),
+    B = maps:remove(<<"score">>, H),
+    case A =:= B of
+        true  -> Idx;
+        false -> find_item_index(Item, T, Idx + 1)
     end.
 
 %%====================================================================
@@ -241,9 +291,18 @@ sse(Req, Type, Message) ->
     })),
     cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
 
-sse_results(Req, Items) ->
+sse_item(Req, Sid, Item) ->
     Payload = iolist_to_binary(json:encode(#{
-        <<"type">>  => <<"results">>,
-        <<"items">> => Items
+        <<"type">> => <<"item">>,
+        <<"sid">>  => Sid,
+        <<"item">> => Item
     })),
-    cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, fin, Req).
+    cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
+
+sse_reorder(Req, Sids, ScoresMap) ->
+    Payload = iolist_to_binary(json:encode(#{
+        <<"type">>   => <<"reorder">>,
+        <<"sids">>   => Sids,
+        <<"scores">> => ScoresMap
+    })),
+    cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
