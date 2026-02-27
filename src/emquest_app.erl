@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc emquest_app — HTTP server based on Cowboy.
+%%% @doc emquest_app — OTP Application Entry Point
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_app).
@@ -8,32 +8,24 @@
 -export([start/2, stop/1]).
 
 start(_StartType, _StartArgs) ->
-    Port = get_port(),
-    io:format("[emquest] Starting on port ~p~n", [Port]),
-
-    Dispatch = cowboy_router:compile([
-        {'_', [
-            {"/",           emquest_handler, index},
-            {"/query",      emquest_handler, query},
-            {"/favicon.ico",  cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
-            {"/static/[...]", cowboy_static,
-                {priv_dir, emquest, "static"}}
-        ]}
-    ]),
-
-    {ok, _} = cowboy:start_clear(emquest_listener,
-        [{port, Port}],
-        #{env => #{dispatch => Dispatch}}
-    ),
-
-    io:format("[emquest] Listening on port ~p~n", [Port]),
+    %% Only ensure cowboy is started when HTTP is needed.
+    %% inets is always started (used by emquest_cli via em_disco).
+    application:ensure_all_started(inets),
+    case http_enabled() of
+        true  -> application:ensure_all_started(cowboy);
+        false -> ok
+    end,
     emquest_sup:start_link().
 
 stop(_State) ->
-    cowboy:stop_listener(emquest_listener).
+    case http_enabled() of
+        true  -> catch cowboy:stop_listener(emquest_listener);
+        false -> ok
+    end.
 
-get_port() ->
-    case application:get_env(emquest, port) of
-        {ok, P} -> P;
-        _       -> 8079
+http_enabled() ->
+    case os:getenv("EMQUEST_HTTP") of
+        "false" -> false;
+        "0"     -> false;
+        _       -> application:get_env(emquest, http, true)
     end.
