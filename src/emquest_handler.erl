@@ -5,12 +5,12 @@
 %%% GET  /       → serves index.html
 %%% POST /query  → SSE stream of progress events + final results
 %%%
-%%% === SSE event types ===
+%%% SSE event types:
 %%%
 %%%   {"type": "status",  "message": "..."}
-%%%   {"type": "item",    "item": {...}, "sid": N}  ← streamed immediately
+%%%   {"type": "item",    "item": {...}, "sid": N}   streamed immediately
 %%%   {"type": "reorder", "sids": [N,...], "scores": {N: 0-3,...}}
-%%%   {"type": "answer",  "message": "..."}         ← LLM synthesis
+%%%   {"type": "answer",  "message": "..."}          LLM synthesis
 %%%   {"type": "error",   "message": "..."}
 %%%
 %%% Items are streamed one-by-one as each agent responds, then
@@ -77,11 +77,14 @@ run_pipeline(Query, Req) ->
         integer_to_binary(length(SubQueries)), " sub-query(ies)..."
     ])),
 
-    %% Step 2 — fan-out to disco in parallel
+    %% Step 2 — fan-out to disco in parallel.
+    %% Read disco URL once here so each spawned process does not hit
+    %% the config file independently.
     Parent = self(),
+    Url    = disco_url(),
     Pids = [spawn(fun() ->
                 Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
-                case fetch_from_disco(Body) of
+                case fetch_from_disco(Body, Url) of
                     {ok, #{<<"embryo_list">> := Items}} ->
                         Parent ! {disco_result, self(), Q, Items};
                     {error, R} ->
@@ -90,9 +93,11 @@ run_pipeline(Query, Req) ->
                 end
              end) || Q <- SubQueries],
 
-    %% Collect results, streaming each item immediately as it arrives
-    %% Returns list of {Sid, RawItem} tagged with stream ids
-    TaggedItems = collect_disco_streaming(Pids, Req, [], 0),
+    %% Collect results, streaming each item immediately as it arrives.
+    %% collect_disco_streaming waits for the first response regardless
+    %% of which PID sends it, so all agents run truly in parallel.
+    %% Returns [{Sid, RawItem}] tagged with stream ids.
+    TaggedItems = collect_disco_streaming(length(Pids), Req, [], 0),
 
     %% Step 3 — deduplicate by URL (first occurrence wins), keep sids
     DedupedTagged = deduplicate_tagged(TaggedItems),
@@ -106,38 +111,38 @@ run_pipeline(Query, Req) ->
     %% Step 4 — rank; result is the same list reordered with scores
     Ranked = queen:rank(Query, RawItems),
 
-    %% Rebuild {Sid, ScoredItem} in ranked order
-    %% Match by original position in DedupedTagged
-    SidArr = list_to_tuple([Sid || {Sid, _} <- DedupedTagged]),
+    %% Rebuild {Sid, Score} in ranked order using an O(n) map lookup
+    %% instead of a linear scan per item.
+    SidIndex = maps:from_list(
+        [{maps:remove(<<"score">>, Item), Sid} || {Sid, Item} <- DedupedTagged]
+    ),
     RankedSids = lists:map(fun(ScoredItem) ->
-        %% Find which position this item occupies in DedupedTagged
-        %% queen:rank preserves items; match by identity (same map ref)
-        Idx = find_item_index(ScoredItem, RawItems, 0),
-        Sid = case Idx >= 0 andalso Idx < tuple_size(SidArr) of
-            true  -> element(Idx + 1, SidArr);
-            false -> -1
-        end,
+        Key   = maps:remove(<<"score">>, ScoredItem),
+        Sid   = maps:get(Key, SidIndex, -1),
         Score = maps:get(<<"score">>, ScoredItem, 0),
         {Sid, Score}
     end, Ranked),
 
-    ValidSids   = [S || {S, _} <- RankedSids, S =/= -1],
-    %% JSON object keys must be binaries — convert integer sids to binary strings.
-    ScoresMap   = maps:from_list([{integer_to_binary(S), Sc}
-                                  || {S, Sc} <- RankedSids, S =/= -1]),
+    ValidSids = [S || {S, _} <- RankedSids, S =/= -1],
+    %% JSON object keys must be binaries — convert integer sids.
+    ScoresMap = maps:from_list([{integer_to_binary(S), Sc}
+                                || {S, Sc} <- RankedSids, S =/= -1]),
 
-    %% Only send reorder if ranking produced a full valid result.
-    %% An empty or partial ValidSids means the LLM failed — keep items as-is.
+    %% Only send reorder when the LLM returned a complete, valid ranking.
+    %% A partial result means the LLM failed — keep items in arrival order
+    %% and notify the client.
     AllSids = [S || {S, _} <- DedupedTagged],
     case length(ValidSids) > 0 andalso
          lists:sort(ValidSids) =:= lists:sort(AllSids) of
-        true  -> sse_reorder(Req, ValidSids, ScoresMap);
+        true  ->
+            sse_reorder(Req, ValidSids, ScoresMap);
         false ->
             io:format("[emquest] Skipping reorder: ranked ~p / ~p items~n",
-                      [length(ValidSids), length(AllSids)])
+                      [length(ValidSids), length(AllSids)]),
+            sse(Req, status, <<"Ranking unavailable — showing results as received">>)
     end,
 
-    %% Step 5 — synthesise prose answer
+    %% Step 5 — synthesise a prose answer
     sse(Req, status, <<"Generating answer...">>),
     Answer = queen:synthesize(Query, Ranked),
     case Answer of
@@ -153,17 +158,20 @@ run_pipeline(Query, Req) ->
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc Collects agent results, streaming each normalised item immediately.
+%% @doc Collects results from N spawned disco processes.
 %%
-%% Returns `[{Sid :: integer(), RawItem :: map()}]' so the caller can
-%% match the stream ids back to their original items after ranking.
+%% Accepts the first message that arrives regardless of which PID sent
+%% it, so all sub-queries run truly in parallel.  Streams each
+%% normalised item to the SSE client immediately upon receipt.
+%%
+%% Returns [{Sid :: integer(), RawItem :: map()}].
 %% @end
 %%--------------------------------------------------------------------
-collect_disco_streaming([], _Req, Acc, _Counter) ->
+collect_disco_streaming(0, _Req, Acc, _Counter) ->
     lists:reverse(Acc);
-collect_disco_streaming([Pid | Rest], Req, Acc, Counter) ->
+collect_disco_streaming(Remaining, Req, Acc, Counter) ->
     receive
-        {disco_result, Pid, SubQ, Items} ->
+        {disco_result, _AnyPid, SubQ, Items} ->
             sse(Req, status, iolist_to_binary([
                 "Got ", integer_to_binary(length(Items)),
                 " result(s) for: \"", SubQ, "\""
@@ -173,10 +181,10 @@ collect_disco_streaming([Pid | Rest], Req, Acc, Counter) ->
                 sse_item(Req, Ctr, NormItem),
                 {[{Ctr, Item} | A], Ctr + 1}
             end, {Acc, Counter}, Items),
-            collect_disco_streaming(Rest, Req, NewAcc, NewCounter)
+            collect_disco_streaming(Remaining - 1, Req, NewAcc, NewCounter)
     after 8000 ->
-        logger:warning("[emquest] disco timeout pid ~p", [Pid]),
-        collect_disco_streaming(Rest, Req, Acc, Counter)
+        logger:warning("[emquest] disco timeout, ~p agent(s) did not respond", [Remaining]),
+        lists:reverse(Acc)
     end.
 
 %%====================================================================
@@ -210,12 +218,12 @@ normalise_item(Item) ->
     Score = maps:get(<<"score">>, Item, 0),
     Type  = maps:get(<<"type">>, Item, <<"generic">>),
 
-    Url   = first_defined(Props, [<<"url">>],                       null),
+    Url   = first_defined(Props, [<<"url">>],                      null),
     Label = first_defined(Props, [<<"title">>, <<"label">>,
-                                   <<"domain">>],                   <<"Result">>),
+                                  <<"domain">>],                   <<"Result">>),
     Value = first_defined(Props, [<<"resume">>, <<"value">>,
-                                   <<"description">>],              <<>>),
-    Ips   = first_defined(Props, [<<"ips">>],                       null),
+                                  <<"description">>],              <<>>),
+    Ips   = first_defined(Props, [<<"ips">>],                      null),
 
     Base = #{<<"label">> => Label, <<"value">> => Value,
              <<"score">> => Score, <<"type">>  => Type},
@@ -235,27 +243,14 @@ first_defined(Props, [Key | Rest], Default) ->
     end.
 
 %%====================================================================
-%% Helpers
-%%====================================================================
-
-%% Find the 0-based index of Item in List by map equality (ignoring score).
-find_item_index(_Item, [], _Idx)      -> -1;
-find_item_index(Item, [H | T], Idx)  ->
-    %% Compare without the injected score field
-    A = maps:remove(<<"score">>, Item),
-    B = maps:remove(<<"score">>, H),
-    case A =:= B of
-        true  -> Idx;
-        false -> find_item_index(Item, T, Idx + 1)
-    end.
-
-%%====================================================================
 %% Disco HTTP
 %%====================================================================
 
-fetch_from_disco(Body) ->
+%% Url is resolved once in run_pipeline and passed down to avoid
+%% reading the config file once per spawned sub-query process.
+fetch_from_disco(Body, Url) ->
     case httpc:request(post,
-                       {disco_url(), [], "application/json",
+                       {Url, [], "application/json",
                         binary_to_list(Body)},
                        [{timeout, 10000}], []) of
         {ok, {{_, 200, _}, _, RespBody}} ->
