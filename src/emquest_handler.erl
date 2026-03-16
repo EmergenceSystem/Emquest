@@ -13,8 +13,13 @@
 %%%   {"type": "answer",  "message": "..."}          LLM synthesis
 %%%   {"type": "error",   "message": "..."}
 %%%
-%%% Items are streamed one-by-one as each agent responds, then
-%%% re-ordered and scored once ranking is complete.
+%%% Multi-disco fan-out:
+%%%
+%%%   queen:disco_nodes/0 returns the list of disco HTTP base URLs
+%%%   (local + optional remote registry).  The pipeline spawns one
+%%%   process per (sub-query × disco node) combination so all sources
+%%%   are queried fully in parallel.
+%%%   Deduplication by URL handles any overlap between nodes.
 %%%
 %%% @author Steve Roques
 %%% @end
@@ -58,7 +63,6 @@ handle_query(RawBody, Req0) ->
         <<"connection">>    => <<"keep-alive">>,
         <<"access-control-allow-origin">> => <<"*">>
     }, Req0),
-
     try json:decode(RawBody) of
         #{<<"query">> := Query} when is_binary(Query) ->
             run_pipeline(Query, Req);
@@ -72,34 +76,35 @@ run_pipeline(Query, Req) ->
     %% Step 1 — expand query into sub-queries
     sse(Req, status, <<"Expanding query...">>),
     SubQueries = queen:expand(Query),
+
+    %% Step 2 — discover all disco nodes (local + registry)
+    Nodes = queen:disco_nodes(),
     sse(Req, status, iolist_to_binary([
-        "Querying agents with ",
+        "Querying ", integer_to_binary(length(Nodes)), " disco node(s) with ",
         integer_to_binary(length(SubQueries)), " sub-query(ies)..."
     ])),
 
-    %% Step 2 — fan-out to disco in parallel.
-    %% Read disco URL once here so each spawned process does not hit
-    %% the config file independently.
+    %% Step 3 — cartesian fan-out: one spawn per (sub-query × disco node).
+    %% All processes run in parallel regardless of how many nodes there are.
+    %% Disco URLs are read once here so spawned closures reuse them.
     Parent = self(),
-    Url    = disco_url(),
+    DiscoUrls = [Node ++ "/query" || Node <- Nodes],
     Pids = [spawn(fun() ->
                 Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
+                Tag  = iolist_to_binary([Q, " @ ", Url]),
                 case fetch_from_disco(Body, Url) of
                     {ok, #{<<"embryo_list">> := Items}} ->
-                        Parent ! {disco_result, self(), Q, Items};
+                        Parent ! {disco_result, self(), Tag, Items};
                     {error, R} ->
-                        logger:warning("[emquest] disco fail ~s: ~p", [Q, R]),
-                        Parent ! {disco_result, self(), Q, []}
+                        logger:warning("[emquest] disco fail ~s: ~p", [Tag, R]),
+                        Parent ! {disco_result, self(), Tag, []}
                 end
-             end) || Q <- SubQueries],
+             end) || Q <- SubQueries, Url <- DiscoUrls],
 
     %% Collect results, streaming each item immediately as it arrives.
-    %% collect_disco_streaming waits for the first response regardless
-    %% of which PID sends it, so all agents run truly in parallel.
-    %% Returns [{Sid, RawItem}] tagged with stream ids.
     TaggedItems = collect_disco_streaming(length(Pids), Req, [], 0),
 
-    %% Step 3 — deduplicate by URL (first occurrence wins), keep sids
+    %% Step 4 — deduplicate by URL (first occurrence wins)
     DedupedTagged = deduplicate_tagged(TaggedItems),
     RawItems      = [Item || {_Sid, Item} <- DedupedTagged],
 
@@ -108,11 +113,10 @@ run_pipeline(Query, Req) ->
         " unique result(s). Ranking with LLM..."
     ])),
 
-    %% Step 4 — rank; result is the same list reordered with scores
+    %% Step 5 — rank; result is the same list reordered with scores
     Ranked = queen:rank(Query, RawItems),
 
-    %% Rebuild {Sid, Score} in ranked order using an O(n) map lookup
-    %% instead of a linear scan per item.
+    %% Rebuild {Sid, Score} in ranked order — O(n) map lookup
     SidIndex = maps:from_list(
         [{maps:remove(<<"score">>, Item), Sid} || {Sid, Item} <- DedupedTagged]
     ),
@@ -124,13 +128,9 @@ run_pipeline(Query, Req) ->
     end, Ranked),
 
     ValidSids = [S || {S, _} <- RankedSids, S =/= -1],
-    %% JSON object keys must be binaries — convert integer sids.
     ScoresMap = maps:from_list([{integer_to_binary(S), Sc}
                                 || {S, Sc} <- RankedSids, S =/= -1]),
 
-    %% Only send reorder when the LLM returned a complete, valid ranking.
-    %% A partial result means the LLM failed — keep items in arrival order
-    %% and notify the client.
     AllSids = [S || {S, _} <- DedupedTagged],
     case length(ValidSids) > 0 andalso
          lists:sort(ValidSids) =:= lists:sort(AllSids) of
@@ -142,7 +142,7 @@ run_pipeline(Query, Req) ->
             sse(Req, status, <<"Ranking unavailable — showing results as received">>)
     end,
 
-    %% Step 5 — synthesise a prose answer
+    %% Step 6 — synthesise a prose answer
     sse(Req, status, <<"Generating answer...">>),
     Answer = queen:synthesize(Query, Ranked),
     case Answer of
@@ -161,8 +161,8 @@ run_pipeline(Query, Req) ->
 %% @doc Collects results from N spawned disco processes.
 %%
 %% Accepts the first message that arrives regardless of which PID sent
-%% it, so all sub-queries run truly in parallel.  Streams each
-%% normalised item to the SSE client immediately upon receipt.
+%% it, so all sub-queries and all disco nodes run truly in parallel.
+%% Streams each normalised item to the SSE client immediately.
 %%
 %% Returns [{Sid :: integer(), RawItem :: map()}].
 %% @end
@@ -171,10 +171,10 @@ collect_disco_streaming(0, _Req, Acc, _Counter) ->
     lists:reverse(Acc);
 collect_disco_streaming(Remaining, Req, Acc, Counter) ->
     receive
-        {disco_result, _AnyPid, SubQ, Items} ->
+        {disco_result, _AnyPid, Tag, Items} ->
             sse(Req, status, iolist_to_binary([
                 "Got ", integer_to_binary(length(Items)),
-                " result(s) for: \"", SubQ, "\""
+                " result(s) for: \"", Tag, "\""
             ])),
             {NewAcc, NewCounter} = lists:foldl(fun(Item, {A, Ctr}) ->
                 NormItem = normalise_item(Item),
@@ -183,7 +183,8 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
             end, {Acc, Counter}, Items),
             collect_disco_streaming(Remaining - 1, Req, NewAcc, NewCounter)
     after 8000 ->
-        logger:warning("[emquest] disco timeout, ~p agent(s) did not respond", [Remaining]),
+        logger:warning("[emquest] disco timeout, ~p process(es) did not respond",
+                       [Remaining]),
         lists:reverse(Acc)
     end.
 
@@ -196,10 +197,8 @@ deduplicate_tagged(TaggedItems) ->
         Props = maps:get(<<"properties">>, Item, #{}),
         Url   = maps:get(<<"url">>, Props, <<>>),
         case Url of
-            %% No URL (DNS, generic…) — always keep, nothing to deduplicate on.
             <<>> ->
                 {[{Sid, Item} | Acc], Seen};
-            %% Has a URL — deduplicate by it.
             _ ->
                 case sets:is_element(Url, Seen) of
                     true  -> {Acc, Seen};
@@ -216,18 +215,15 @@ deduplicate_tagged(TaggedItems) ->
 normalise_item(Item) ->
     Props = maps:get(<<"properties">>, Item, Item),
     Score = maps:get(<<"score">>, Item, 0),
-    Type  = maps:get(<<"type">>, Item, <<"generic">>),
-
+    Type  = maps:get(<<"type">>,  Item, <<"generic">>),
     Url   = first_defined(Props, [<<"url">>],                      null),
     Label = first_defined(Props, [<<"title">>, <<"label">>,
                                   <<"domain">>],                   <<"Result">>),
     Value = first_defined(Props, [<<"resume">>, <<"value">>,
                                   <<"description">>],              <<>>),
     Ips   = first_defined(Props, [<<"ips">>],                      null),
-
-    Base = #{<<"label">> => Label, <<"value">> => Value,
-             <<"score">> => Score, <<"type">>  => Type},
-
+    Base  = #{<<"label">> => Label, <<"value">> => Value,
+              <<"score">> => Score, <<"type">>  => Type},
     case {Url, Ips} of
         {null, [_|_]} -> Base#{<<"ips">>  => Ips};
         {null, _}     -> Base;
@@ -247,7 +243,7 @@ first_defined(Props, [Key | Rest], Default) ->
 %%====================================================================
 
 %% Url is resolved once in run_pipeline and passed down to avoid
-%% reading the config file once per spawned sub-query process.
+%% reading the config file once per spawned process.
 fetch_from_disco(Body, Url) ->
     case httpc:request(post,
                        {Url, [], "application/json",
@@ -258,21 +254,6 @@ fetch_from_disco(Body, Url) ->
             catch _:_ -> {error, invalid_json} end;
         {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
         {error, R}                 -> {error, R}
-    end.
-
-disco_url() ->
-    case queen:conf_path() of
-        undefined -> "http://localhost:8080/query";
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} ->
-                    Conf = queen:parse_conf(Bin),
-                    Base = maps:get("server_url",
-                               maps:get("em_disco", Conf, #{}),
-                               "http://localhost:8080"),
-                    Base ++ "/query";
-                _ -> "http://localhost:8080/query"
-            end
     end.
 
 %%====================================================================

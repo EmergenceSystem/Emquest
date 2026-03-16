@@ -1,28 +1,30 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% queen — LLM Query Expander and Result Ranker
+%%% queen — LLM Query Expander, Ranker and Disco Registry
 %%%
-%%% Two responsibilities:
+%%% Responsibilities:
 %%%
-%%%   expand/1     — given a user query, returns a list of simpler
-%%%                  sub-queries to fan out to disco.  For short/simple
-%%%                  queries returns [Query] as-is.
+%%%   expand/1      — given a user query, returns a list of simpler
+%%%                   sub-queries to fan out to disco nodes.
 %%%
-%%%   rank/2       — given the original query and the full deduplicated
-%%%                  result list, asks the LLM to return a sorted order
-%%%                  (most relevant first).  ALL results are kept —
-%%%                  nothing is hidden.
+%%%   rank/2        — given the original query and the full deduplicated
+%%%                   result list, asks the LLM to return a sorted order.
+%%%                   ALL results are kept — only the order changes.
 %%%
-%%%   synthesize/2 — generates a short prose answer from the top results.
+%%%   synthesize/2  — generates a short prose answer from the top results.
 %%%
-%%% LLM ranking contract:
-%%%
-%%%   The LLM receives the list with indices and returns ONLY a JSON
-%%%   array of those indices in relevance order, e.g.: [2, 0, 4, 1, 3]
-%%%   Each ranked item gets a score (3 = top, 0 = tail) based on its
-%%%   position in the returned list.
+%%%   disco_nodes/0 — returns the list of disco HTTP base URLs to query.
+%%%                   Reads local config first, then optionally fetches
+%%%                   a remote registry. Results are cached in ETS for
+%%%                   registry_ttl seconds.
 %%%
 %%% Configuration (emergence.conf):
+%%%
+%%%   [em_disco]
+%%%   nodes        = localhost:8080, em_disco.roques.me:8080
+%%%   registry_url = https://em_disco.roques.me/nodes.json
+%%%   registry_ttl = 300
+%%%   use_registry = true
 %%%
 %%%   [llm]
 %%%   provider      = mistral
@@ -35,10 +37,14 @@
 %%%-------------------------------------------------------------------
 -module(queen).
 
--export([expand/1, rank/2, synthesize/2, conf_path/0, parse_conf/1]).
+-export([expand/1, rank/2, synthesize/2, disco_nodes/0,
+         conf_path/0, parse_conf/1]).
 
 -define(DEFAULT_SYSTEM_PROMPT,
     "You are a search assistant. Be concise and precise.").
+
+%% ETS table name for the disco registry cache.
+-define(REGISTRY_CACHE, queen_registry_cache).
 
 %%====================================================================
 %% Query expansion
@@ -48,12 +54,7 @@
 %% @doc Expands a user query into simpler search sub-queries.
 %%
 %% For queries under 25 chars, skips expansion and returns [Query].
-%% Otherwise asks the LLM for 2-3 relevant sub-queries and always
-%% prepends the original query so it is always searched as-is.
-%%
-%% The original query is placed first in the returned list.
-%% Sub-queries are deduplicated but their relative order is preserved
-%% (usort is NOT used on the full list to avoid reordering the head).
+%% The original query is always placed first in the returned list.
 %% @end
 %%--------------------------------------------------------------------
 -spec expand(binary()) -> [binary()].
@@ -76,9 +77,7 @@ expand(Query) ->
         {ok, Text} -> parse_json_list(Text);
         _          -> []
     end,
-    %% The original query always comes first.
-    %% Sub-queries are deduplicated; the original is removed from
-    %% the sub-list before prepending so it is not duplicated.
+    %% Original query always first; sub-queries deduplicated after.
     Deduped = lists:usort(SubQueries),
     [Query | lists:delete(Query, Deduped)].
 
@@ -86,37 +85,28 @@ expand(Query) ->
 %% Synthesis
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% @doc Generates a short prose answer for the query.
-%%
-%% Called after ranking so the LLM has context from the top results.
-%% Uses the user-configured system_prompt (language, tone, etc.).
-%% Returns plain text binary — no JSON, goes straight to the client.
-%% @end
-%%--------------------------------------------------------------------
 -spec synthesize(binary(), [map()]) -> binary().
 synthesize(Query, RankedItems) ->
     Conf      = read_llm_conf(),
     Provider  = maps:get(provider, Conf, <<"mistral">>),
-    SysPrompt = ensure_binary(maps:get(system_prompt, Conf, ?DEFAULT_SYSTEM_PROMPT)),
-
-    %% Pass only the top 5 results as context to keep the prompt small.
-    TopN = lists:sublist(RankedItems, 5),
+    SysPrompt = ensure_binary(maps:get(system_prompt, Conf,
+                                       ?DEFAULT_SYSTEM_PROMPT)),
+    TopN    = lists:sublist(RankedItems, 5),
     Context = iolist_to_binary(json:encode(
         [begin
             Props = maps:get(<<"properties">>, Item, Item),
-            Label = maps:get(<<"title">>,  Props, maps:get(<<"label">>,  Props, <<>>)),
-            Value = maps:get(<<"resume">>, Props, maps:get(<<"value">>,  Props, <<>>)),
+            Label = maps:get(<<"title">>,  Props,
+                        maps:get(<<"label">>,  Props, <<>>)),
+            Value = maps:get(<<"resume">>, Props,
+                        maps:get(<<"value">>,  Props, <<>>)),
             #{<<"l">> => Label, <<"v">> => Value}
          end || Item <- TopN]
     )),
-
     Prompt = <<"Answer or summarise the following query in 2-4 sentences. "
                "Use the provided search results as context. "
                "Reply in plain text only — no JSON, no markdown, no bullet points.\n\n"
                "Query: ", Query/binary, "\n\n"
                "Top results context:\n", Context/binary>>,
-
     HandlerConf = handler_conf(Provider, Conf, SysPrompt),
     case call_handler(Provider, Prompt, HandlerConf) of
         {ok, Text} -> Text;
@@ -127,21 +117,10 @@ synthesize(Query, RankedItems) ->
 %% Result ranking
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% @doc Ranks a result list by relevance to the query.
-%%
-%% Sends the list with numeric indices to the LLM, which returns those
-%% indices sorted by relevance (most relevant first).
-%% ALL items are kept — only the order changes.
-%% Items get a score 0-3 based on their rank quartile.
-%% @end
-%%--------------------------------------------------------------------
 -spec rank(binary(), [map()]) -> [map()].
 rank(_Query, []) -> [];
 rank(Query, Items) ->
     Conf = read_llm_conf(),
-
-    %% Build a compact indexed representation for the LLM prompt.
     Indexed = lists:zip(lists:seq(0, length(Items) - 1), Items),
     IndexedJson = iolist_to_binary(json:encode(
         [begin
@@ -153,7 +132,6 @@ rank(Query, Items) ->
             #{<<"i">> => I, <<"l">> => Label, <<"v">> => Value}
          end || {I, Item} <- Indexed]
     )),
-
     Prompt = <<"You receive search results and a query. "
                "Return ONLY a JSON array of the result indices sorted "
                "by relevance to the query (most relevant first). "
@@ -161,27 +139,21 @@ rank(Query, Items) ->
                "Example for 4 results: [2, 0, 3, 1]\n\n"
                "Query: ", Query/binary, "\n\n"
                "Results:\n", IndexedJson/binary>>,
-
     HandlerConf = handler_conf(
         maps:get(provider, Conf, <<"mistral">>),
-        %% Low temperature for deterministic ranking.
         Conf#{temperature => 0.1},
         <<"You rank search results. Reply only with a JSON array of integers.">>
     ),
-
     RankedIndices = case call_handler(maps:get(provider, Conf, <<"mistral">>),
                                       Prompt, HandlerConf) of
         {ok, Text} ->
             Parsed  = parse_json_integers(Text),
-            %% Append any indices the LLM omitted so no item is lost.
             All     = lists:seq(0, length(Items) - 1),
             Missing = All -- Parsed,
             Parsed ++ Missing;
         _ ->
             lists:seq(0, length(Items) - 1)
     end,
-
-    %% Re-order items and inject a 0-3 score based on rank position.
     Total    = length(RankedIndices),
     ItemsArr = list_to_tuple(Items),
     lists:filtermap(fun({Pos, Idx}) ->
@@ -194,11 +166,139 @@ rank(Query, Items) ->
         end
     end, lists:zip(lists:seq(0, length(RankedIndices) - 1), RankedIndices)).
 
-%% Maps a 0-based position to a 0-3 relevance score by quartile.
 score_for_position(_Pos, Total) when Total =< 1 -> 3;
 score_for_position(Pos, Total) ->
     Quartile = (Pos * 4) div Total,
     max(0, 3 - Quartile).
+
+%%====================================================================
+%% Disco node discovery
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% @doc Returns the list of disco HTTP base URLs to query.
+%%
+%% Merges local nodes (from emergence.conf or env vars) with remote
+%% nodes from the public registry (if use_registry = true).
+%% The local nodes are always first and are never deduplicated away.
+%%
+%% Remote registry results are cached in ETS for registry_ttl seconds
+%% so the registry is not fetched on every user query.
+%% @end
+%%--------------------------------------------------------------------
+-spec disco_nodes() -> [string()].
+disco_nodes() ->
+    Conf   = read_disco_conf(),
+    Local  = local_nodes(Conf),
+    Remote = case use_registry(Conf) of
+        false -> [];
+        true  -> fetch_registry_cached(Conf)
+    end,
+    %% Local nodes first, then remote — deduplicated, order preserved.
+    lists:foldl(fun(N, Acc) ->
+        case lists:member(N, Acc) of
+            true  -> Acc;
+            false -> Acc ++ [N]
+        end
+    end, Local, Remote).
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Reads local disco nodes from emergence.conf.
+%%
+%% Accepts either:
+%%   nodes      = localhost:8080, em_disco.roques.me:8080
+%%   server_url = http://localhost:8080   (legacy, single node)
+%%
+%% Returns HTTP base URLs.
+%% @end
+%%--------------------------------------------------------------------
+-spec local_nodes(map()) -> [string()].
+local_nodes(Conf) ->
+    case maps:get("nodes", Conf, undefined) of
+        undefined ->
+            Url = maps:get("server_url", Conf, "http://localhost:8080"),
+            [Url];
+        NodesStr ->
+            Entries = string:split(NodesStr, ",", all),
+            lists:filtermap(fun(Entry) ->
+                case string:trim(Entry) of
+                    "" -> false;
+                    E  -> {true, node_to_url(E)}
+                end
+            end, Entries)
+    end.
+
+%% Converts "host:port" or "host" to "http://host:port".
+node_to_url(Entry) ->
+    case string:prefix(Entry, "http") of
+        nomatch -> "http://" ++ Entry;
+        _       -> Entry
+    end.
+
+use_registry(Conf) ->
+    maps:get("use_registry", Conf, "false") =:= "true".
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Fetches the remote registry, using ETS cache when still fresh.
+%% @end
+%%--------------------------------------------------------------------
+-spec fetch_registry_cached(map()) -> [string()].
+fetch_registry_cached(Conf) ->
+    case maps:get("registry_url", Conf, undefined) of
+        undefined -> [];
+        Url ->
+            TTL = list_to_integer(maps:get("registry_ttl", Conf, "300")),
+            ensure_cache_table(),
+            Now = erlang:system_time(second),
+            case ets:lookup(?REGISTRY_CACHE, Url) of
+                [{_, Nodes, Expiry}] when Expiry > Now ->
+                    Nodes;
+                _ ->
+                    Nodes = fetch_registry(Url),
+                    ets:insert(?REGISTRY_CACHE, {Url, Nodes, Now + TTL}),
+                    Nodes
+            end
+    end.
+
+ensure_cache_table() ->
+    case ets:whereis(?REGISTRY_CACHE) of
+        undefined ->
+            ets:new(?REGISTRY_CACHE,
+                    [set, named_table, public, {read_concurrency, true}]);
+        _ -> ok
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Fetches the public registry JSON and extracts open node URLs.
+%%
+%% Registry format:
+%%   {
+%%     "version": "1",
+%%     "nodes": [
+%%       {"url": "http://em_disco.roques.me:8080", "open": true},
+%%       ...
+%%     ]
+%%   }
+%% @end
+%%--------------------------------------------------------------------
+-spec fetch_registry(string()) -> [string()].
+fetch_registry(Url) ->
+    case httpc:request(get, {Url, []}, [{timeout, 5000}],
+                       [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, Body}} ->
+            try
+                #{<<"nodes">> := Nodes} = json:decode(Body),
+                [binary_to_list(maps:get(<<"url">>, N, <<>>))
+                 || N <- Nodes,
+                    is_map(N),
+                    maps:get(<<"open">>, N, false) =:= true,
+                    maps:get(<<"url">>,  N, <<>>) =/= <<>>]
+            catch _:_ -> [] end;
+        _ -> []
+    end.
 
 %%====================================================================
 %% LLM dispatch
@@ -210,15 +310,6 @@ call_handler(<<"openai">>,  Prompt, Conf) -> openai_handler:generate(Prompt, Con
 call_handler(<<"claude">>,  Prompt, Conf) -> claude_handler:generate(Prompt, Conf);
 call_handler(_, Prompt, Conf)             -> mistral_handler:generate(Prompt, Conf).
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc Builds a handler config map from emergence.conf + env vars.
-%%
-%% Starts from the handler's get_env_config/0 (picks up API keys from
-%% the environment) then overlays conf file values and the given
-%% system prompt.
-%% @end
-%%--------------------------------------------------------------------
 handler_conf(Provider, Conf, SysPrompt) ->
     Base = case Provider of
         <<"mistral">> -> mistral_handler:get_env_config();
@@ -238,7 +329,7 @@ handler_conf(Provider, Conf, SysPrompt) ->
     end.
 
 %%====================================================================
-%% JSON parsing helpers
+%% JSON helpers
 %%====================================================================
 
 parse_json_list(Text) ->
@@ -253,7 +344,6 @@ parse_json_integers(Text) ->
         [I || I <- List, is_integer(I)]
     catch _:_ -> [] end.
 
-%% Strips markdown code fences that some LLMs add around JSON output.
 strip_fences(Text) ->
     T1 = re:replace(Text, <<"^```(json)?\\s*">>, <<"">>,
                     [{return, binary}, multiline]),
@@ -274,6 +364,16 @@ read_llm_conf() ->
             end
     end.
 
+read_disco_conf() ->
+    case conf_path() of
+        undefined -> #{};
+        Path ->
+            case file:read_file(Path) of
+                {ok, Bin} -> maps:get("em_disco", parse_conf(Bin), #{});
+                _         -> #{}
+            end
+    end.
+
 parse_llm_section(ConfMap) ->
     Section = maps:get("llm", ConfMap, #{}),
     maps:fold(fun(K, V, Acc) ->
@@ -289,11 +389,6 @@ parse_llm_section(ConfMap) ->
         Acc#{list_to_atom(K) => Value}
     end, #{}, Section).
 
-%%--------------------------------------------------------------------
-%% @doc Returns the path to emergence.conf.
-%% Exported so emquest_handler can reuse it.
-%% @end
-%%--------------------------------------------------------------------
 -spec conf_path() -> string() | undefined.
 conf_path() ->
     case {os:getenv("HOME"), os:getenv("APPDATA"), os:type()} of
@@ -307,11 +402,6 @@ conf_path() ->
                            "emergence.conf"])
     end.
 
-%%--------------------------------------------------------------------
-%% @doc Parses an INI-style config file into a nested map.
-%% Exported so emquest_handler can reuse it.
-%% @end
-%%--------------------------------------------------------------------
 -spec parse_conf(binary()) -> map().
 parse_conf(Bin) ->
     Lines = binary:split(Bin, <<"\n">>, [global, trim_all]),
@@ -321,7 +411,7 @@ parse_conf(Bin) ->
 parse_line(<<";", _/binary>>, Acc) -> Acc;
 parse_line(<<"#", _/binary>>, Acc) -> Acc;
 parse_line(<<"[", Rest/binary>>, {Map, _Sec}) ->
-    Sec = string:trim(binary_to_list(binary:part(Rest, 0, byte_size(Rest) - 1))),
+    Sec = string:trim(binary_to_list(Rest), both, "]\r\n"),
     {Map#{Sec => #{}}, Sec};
 parse_line(Line, {Map, Sec}) when Sec =/= "" ->
     case binary:split(Line, <<"=">>) of
