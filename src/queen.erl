@@ -4,24 +4,33 @@
 %%%
 %%% Responsibilities:
 %%%
-%%%   expand/1      — given a user query, returns a list of simpler
-%%%                   sub-queries to fan out to disco nodes.
+%%%   expand/1      — expands a user query into sub-queries.
+%%%   rank/2        — ranks results by relevance via LLM.
+%%%   synthesize/2  — generates a prose answer from top results.
+%%%   disco_nodes/0 — returns the list of disco HTTP(S) base URLs.
 %%%
-%%%   rank/2        — given the original query and the full deduplicated
-%%%                   result list, asks the LLM to return a sorted order.
-%%%                   ALL results are kept — only the order changes.
+%%% === Node URL resolution ===
 %%%
-%%%   synthesize/2  — generates a short prose answer from the top results.
+%%% Reads the [em_disco] section from emergence.conf.
+%%% Accepts entries as host:port or bare host:
 %%%
-%%%   disco_nodes/0 — returns the list of disco HTTP base URLs to query.
-%%%                   Reads local config first, then optionally fetches
-%%%                   a remote registry. Results are cached in ETS for
-%%%                   registry_ttl seconds.
+%%%   localhost              → http://localhost:8080
+%%%   localhost:8080         → http://localhost:8080
+%%%   localhost:9000         → http://localhost:9000
+%%%   em_disco.roques.me     → https://em_disco.roques.me
+%%%   em_disco.roques.me:443 → https://em_disco.roques.me
+%%%   em_disco.roques.me:8080→ http://em_disco.roques.me:8080
 %%%
-%%% Configuration (emergence.conf):
+%%% Rules:
+%%%   localhost / 127.0.0.1 always use http://
+%%%   port 443 uses https:// and omits the port from the URL
+%%%   any other explicit port uses http:// with the port in the URL
+%%%   bare remote host defaults to https:// on port 443
+%%%
+%%% === Configuration (emergence.conf) ===
 %%%
 %%%   [em_disco]
-%%%   nodes        = localhost:8080, em_disco.roques.me:8080
+%%%   nodes        = localhost:8080, em_disco.roques.me
 %%%   registry_url = https://em_disco.roques.me/nodes.json
 %%%   registry_ttl = 300
 %%%   use_registry = true
@@ -43,20 +52,12 @@
 -define(DEFAULT_SYSTEM_PROMPT,
     "You are a search assistant. Be concise and precise.").
 
-%% ETS table name for the disco registry cache.
 -define(REGISTRY_CACHE, queen_registry_cache).
 
 %%====================================================================
 %% Query expansion
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% @doc Expands a user query into simpler search sub-queries.
-%%
-%% For queries under 25 chars, skips expansion and returns [Query].
-%% The original query is always placed first in the returned list.
-%% @end
-%%--------------------------------------------------------------------
 -spec expand(binary()) -> [binary()].
 expand(Query) when byte_size(Query) < 25 ->
     [Query];
@@ -77,7 +78,6 @@ expand(Query) ->
         {ok, Text} -> parse_json_list(Text);
         _          -> []
     end,
-    %% Original query always first; sub-queries deduplicated after.
     Deduped = lists:usort(SubQueries),
     [Query | lists:delete(Query, Deduped)].
 
@@ -176,25 +176,21 @@ score_for_position(Pos, Total) ->
 %%====================================================================
 
 %%--------------------------------------------------------------------
-%% @doc Returns the list of disco HTTP base URLs to query.
+%% @doc Returns the list of disco HTTP(S) base URLs to query.
 %%
-%% Merges local nodes (from emergence.conf or env vars) with remote
-%% nodes from the public registry (if use_registry = true).
-%% The local nodes are always first and are never deduplicated away.
-%%
-%% Remote registry results are cached in ETS for registry_ttl seconds
-%% so the registry is not fetched on every user query.
+%% Merges local nodes from emergence.conf with optional remote
+%% registry nodes. Local nodes always come first.
+%% Remote registry is cached in ETS for registry_ttl seconds.
 %% @end
 %%--------------------------------------------------------------------
 -spec disco_nodes() -> [string()].
 disco_nodes() ->
     Conf   = read_disco_conf(),
-    Local  = local_nodes(Conf),
+    Local  = local_node_urls(Conf),
     Remote = case use_registry(Conf) of
         false -> [];
         true  -> fetch_registry_cached(Conf)
     end,
-    %% Local nodes first, then remote — deduplicated, order preserved.
     lists:foldl(fun(N, Acc) ->
         case lists:member(N, Acc) of
             true  -> Acc;
@@ -204,44 +200,70 @@ disco_nodes() ->
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc Reads local disco nodes from emergence.conf.
-%%
-%% Accepts either:
-%%   nodes      = localhost:8080, em_disco.roques.me:8080
-%%   server_url = http://localhost:8080   (legacy, single node)
-%%
-%% Returns HTTP base URLs.
+%% @doc Converts the nodes config into HTTP(S) base URLs.
 %% @end
 %%--------------------------------------------------------------------
--spec local_nodes(map()) -> [string()].
-local_nodes(Conf) ->
+-spec local_node_urls(map()) -> [string()].
+local_node_urls(Conf) ->
     case maps:get("nodes", Conf, undefined) of
         undefined ->
-            Url = maps:get("server_url", Conf, "http://localhost:8080"),
-            [Url];
+            %% Legacy server_url key.
+            [maps:get("server_url", Conf, "http://localhost:8080")];
         NodesStr ->
             Entries = string:split(NodesStr, ",", all),
             lists:filtermap(fun(Entry) ->
                 case string:trim(Entry) of
                     "" -> false;
-                    E  -> {true, node_to_url(E)}
+                    E  -> {true, entry_to_url(E)}
                 end
             end, Entries)
     end.
 
-%% Converts "host:port" or "host" to "http://host:port".
-node_to_url(Entry) ->
-    case string:prefix(Entry, "http") of
-        nomatch -> "http://" ++ Entry;
-        _       -> Entry
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Converts a "host" or "host:port" entry to an HTTP(S) URL.
+%%
+%% localhost / 127.0.0.1   → http://host:port  (port defaults to 8080)
+%% remote host, port 443   → https://host       (standard, omit port)
+%% remote host, other port → http://host:port   (explicit non-TLS)
+%% bare remote host        → https://host       (defaults to 443/TLS)
+%% @end
+%%--------------------------------------------------------------------
+-spec entry_to_url(string()) -> string().
+entry_to_url(Entry) ->
+    case string:split(Entry, ":", trailing) of
+        [Host, PortStr] ->
+            H = string:trim(Host),
+            case catch list_to_integer(string:trim(PortStr)) of
+                P when is_integer(P) -> build_url(H, P, explicit);
+                _                    -> build_url(H, 8080, default)
+            end;
+        [Host] ->
+            H = string:trim(Host),
+            build_url(H, default, default)
     end.
+
+-spec build_url(string(), integer() | default, explicit | default) -> string().
+%% localhost / 127.0.0.1 — always plain HTTP
+build_url("localhost",  Port, _) ->
+    P = if is_integer(Port) -> Port; true -> 8080 end,
+    "http://localhost:" ++ integer_to_list(P);
+build_url("127.0.0.1", Port, _) ->
+    P = if is_integer(Port) -> Port; true -> 8080 end,
+    "http://127.0.0.1:" ++ integer_to_list(P);
+%% Remote host, port 443 or no port — HTTPS, omit port
+build_url(Host, 443,     _)       -> "https://" ++ Host;
+build_url(Host, default, default) -> "https://" ++ Host;
+%% Remote host, explicit non-443 port — HTTP with port
+build_url(Host, Port, explicit) ->
+    "http://" ++ Host ++ ":" ++ integer_to_list(Port).
 
 use_registry(Conf) ->
     maps:get("use_registry", Conf, "false") =:= "true".
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc Fetches the remote registry, using ETS cache when still fresh.
+%% @doc Returns cached registry nodes or fetches them if stale.
 %% @end
 %%--------------------------------------------------------------------
 -spec fetch_registry_cached(map()) -> [string()].
@@ -270,20 +292,6 @@ ensure_cache_table() ->
         _ -> ok
     end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc Fetches the public registry JSON and extracts open node URLs.
-%%
-%% Registry format:
-%%   {
-%%     "version": "1",
-%%     "nodes": [
-%%       {"url": "http://em_disco.roques.me:8080", "open": true},
-%%       ...
-%%     ]
-%%   }
-%% @end
-%%--------------------------------------------------------------------
 -spec fetch_registry(string()) -> [string()].
 fetch_registry(Url) ->
     case httpc:request(get, {Url, []}, [{timeout, 5000}],
@@ -411,7 +419,7 @@ parse_conf(Bin) ->
 parse_line(<<";", _/binary>>, Acc) -> Acc;
 parse_line(<<"#", _/binary>>, Acc) -> Acc;
 parse_line(<<"[", Rest/binary>>, {Map, _Sec}) ->
-    Sec = string:trim(binary_to_list(Rest), both, "]\r\n"),
+    Sec = string:trim(binary_to_list(Rest), both, "]\r\n "),
     {Map#{Sec => #{}}, Sec};
 parse_line(Line, {Map, Sec}) when Sec =/= "" ->
     case binary:split(Line, <<"=">>) of
