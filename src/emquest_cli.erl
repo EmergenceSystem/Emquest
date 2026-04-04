@@ -4,10 +4,9 @@
 %%% Provides a convenience interface for querying the Emergence
 %%% network directly from an `rebar3 shell' session.
 %%%
-%%% Unlike {@link emquest_handler}, which runs the full pipeline
-%%% server-side, this module is a thin HTTP client: it POSTs the
-%%% search term to the running Emquest HTTP API and pretty-prints
-%%% the response.
+%%% Unlike a browser client that goes through {@link emquest_handler},
+%%% this module calls em_disco directly — it POSTs the search term
+%%% to the configured em_disco HTTP API and pretty-prints the response.
 %%%
 %%% The target URL is resolved in this order:
 %%% <ol>

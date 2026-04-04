@@ -43,9 +43,9 @@
 %%% localhost              -> http://localhost:8080
 %%% localhost:8080         -> http://localhost:8080
 %%% localhost:9000         -> http://localhost:9000
-%%% em_disco.roques.me     -> https://em_disco.roques.me
-%%% em_disco.roques.me:443 -> https://em_disco.roques.me
-%%% em_disco.roques.me:8080-> http://em_disco.roques.me:8080
+%%% em-disco.roques.me     -> https://em-disco.roques.me
+%%% em-disco.roques.me:443 -> https://em-disco.roques.me
+%%% em-disco.roques.me:8080-> http://em-disco.roques.me:8080
 %%% '''
 %%%
 %%% Resolution rules:
