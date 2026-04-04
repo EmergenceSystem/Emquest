@@ -132,14 +132,13 @@ async function submitQuery() {
     empty.hidden   = true;
     results.hidden = false;
 
-    /* Pre-render layout: progress + results list */
+    /* Pre-render layout: progress log above results */
     results.innerHTML = `
         <div class="progress-log" id="progress-log"></div>
         <ul class="items-list" id="results-list"></ul>
     `;
 
-    /* Answer panel: always present, empty until answer arrives */
-    renderAnswerPanel('');
+    hideAnswerPanel();
 
     try {
         const resp = await fetch('/query', {
@@ -177,15 +176,14 @@ async function submitQuery() {
     } finally {
         btn.classList.remove('loading');
         btn.disabled = false;
-
-        /* Fade out progress log after a short delay */
+        /* Fallback: remove progress log if reorder never arrived */
         const log = document.getElementById('progress-log');
         if (log) {
             setTimeout(() => {
-                log.style.transition = 'opacity 0.5s ease';
+                log.style.transition = 'opacity 1.2s ease';
                 log.style.opacity    = '0';
-                setTimeout(() => log.remove(), 500);
-            }, 1200);
+                setTimeout(() => log.remove(), 1200);
+            }, 1000);
         }
     }
 }
@@ -252,15 +250,15 @@ function handleEvent(event) {
 
                 list.appendChild(card); /* move to end in ranked order */
             });
-            break;
-        }
 
-        /* ── AI answer — just fill the pre-rendered panel ──────── */
-        case 'answer': {
-            const el = document.getElementById('answer-panel-text');
-            if (el) {
-                el.textContent = event.message;
-                el.classList.add('has-content');
+            /* Hide progress log now that ranking is done → cards float up */
+            const log = document.getElementById('progress-log');
+            if (log) {
+                setTimeout(() => {
+                    log.style.transition = 'opacity 1.2s ease';
+                    log.style.opacity    = '0';
+                    setTimeout(() => log.remove(), 1200);
+                }, 2000);
             }
             break;
         }

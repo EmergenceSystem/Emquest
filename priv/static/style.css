@@ -2,6 +2,7 @@
 /* Reset & custom properties                                          */
 /* ================================================================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 :root {
     --bg:            #060a08;
