@@ -1,27 +1,44 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% emquest_handler — Streaming HTTP Handler (Server-Sent Events)
+%%% @doc Cowboy HTTP handler — SSE streaming pipeline.
 %%%
-%%% GET  /       → serves index.html
-%%% POST /query  → SSE stream of progress events + final results
+%%% Handles two routes registered by {@link emquest_sup}:
 %%%
-%%% SSE event types:
+%%% ```
+%%% GET  /       → serves priv/templates/index.html
+%%% POST /query  → streams results as Server-Sent Events
+%%% '''
 %%%
-%%%   {"type": "status",  "message": "..."}
-%%%   {"type": "item",    "item": {...}, "sid": N}   streamed immediately
-%%%   {"type": "reorder", "sids": [N,...], "scores": {N: 0-3,...}}
-%%%   {"type": "answer",  "message": "..."}          LLM synthesis
-%%%   {"type": "error",   "message": "..."}
+%%% === SSE event types ===
 %%%
-%%% Multi-disco fan-out:
+%%% ```
+%%% {"type": "status",  "message": "..."}
+%%% {"type": "item",    "item": {...}, "sid": N}
+%%% {"type": "reorder", "sids": [N,...], "scores": {"N": 0-3, ...}}
+%%% {"type": "error",   "message": "..."}
+%%% '''
 %%%
-%%%   queen:disco_nodes/0 returns the list of disco HTTP base URLs
-%%%   (local + optional remote registry).  The pipeline spawns one
-%%%   process per (sub-query × disco node) combination so all sources
-%%%   are queried fully in parallel.
-%%%   Deduplication by URL handles any overlap between nodes.
+%%% === Pipeline (POST /query) ===
 %%%
-%%% @author Steve Roques
+%%% ```
+%%% 1. queen:expand/1      — split long queries into sub-queries (LLM)
+%%% 2. queen:disco_nodes/0 — resolve all configured disco node URLs
+%%% 3. Fan-out             — one process per (sub-query × disco node),
+%%%                          all running in parallel
+%%% 4. Collect             — stream each item to the SSE client as it
+%%%                          arrives; 8 s per-process timeout
+%%% 5. Deduplicate         — first occurrence by URL wins
+%%% 6. Reorder             — always emitted so the browser can remove
+%%%                          duplicates that arrived before dedup ran
+%%% '''
+%%%
+%%% === Multi-disco fan-out ===
+%%%
+%%% `queen:disco_nodes/0' returns the full list of disco HTTP base URLs
+%%% (local nodes from `emergence.conf' plus optional remote registry).
+%%% The pipeline spawns one process per (sub-query × disco node) so all
+%%% sources are queried fully in parallel. Deduplication by URL absorbs
+%%% any overlap between nodes or sub-queries.
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_handler).
@@ -72,7 +89,16 @@ handle_query(RawBody, Req0) ->
         sse(Req, error, <<"Invalid JSON body">>)
     end.
 
+%% @private
+%% @doc Execute the full query pipeline and stream results to the client.
+%%
+%% Runs synchronously inside the Cowboy request process. Each step
+%% sends SSE events to `Req' as it completes. Returns only after the
+%% stream is closed with `cowboy_req:stream_body(<<>>, fin, Req)'.
+%% @end
+-spec run_pipeline(binary(), cowboy_req:req()) -> ok.
 run_pipeline(Query, Req) ->
+    logger:notice("[emquest] query: ~ts", [Query]),
     %% Step 1 — expand query into sub-queries
     sse(Req, status, <<"Expanding query...">>),
     SubQueries = queen:expand(Query),
@@ -106,49 +132,13 @@ run_pipeline(Query, Req) ->
 
     %% Step 4 — deduplicate by URL (first occurrence wins)
     DedupedTagged = deduplicate_tagged(TaggedItems),
-    RawItems      = [Item || {_Sid, Item} <- DedupedTagged],
 
-    sse(Req, status, iolist_to_binary([
-        integer_to_binary(length(DedupedTagged)),
-        " unique result(s). Ranking with LLM..."
-    ])),
+    logger:notice("[emquest] ~p response(s) collected", [length(DedupedTagged)]),
 
-    %% Step 5 — rank; result is the same list reordered with scores
-    Ranked = queen:rank(Query, RawItems),
-
-    %% Rebuild {Sid, Score} in ranked order — O(n) map lookup
-    SidIndex = maps:from_list(
-        [{maps:remove(<<"score">>, Item), Sid} || {Sid, Item} <- DedupedTagged]
-    ),
-    RankedSids = lists:map(fun(ScoredItem) ->
-        Key   = maps:remove(<<"score">>, ScoredItem),
-        Sid   = maps:get(Key, SidIndex, -1),
-        Score = maps:get(<<"score">>, ScoredItem, 0),
-        {Sid, Score}
-    end, Ranked),
-
-    ValidSids = [S || {S, _} <- RankedSids, S =/= -1],
-    ScoresMap = maps:from_list([{integer_to_binary(S), Sc}
-                                || {S, Sc} <- RankedSids, S =/= -1]),
-
+    %% Step 5 — send reorder to deduplicate browser-side (arrival order, no LLM ranking)
     AllSids = [S || {S, _} <- DedupedTagged],
-    case length(ValidSids) > 0 andalso
-         lists:sort(ValidSids) =:= lists:sort(AllSids) of
-        true  ->
-            sse_reorder(Req, ValidSids, ScoresMap);
-        false ->
-            io:format("[emquest] Skipping reorder: ranked ~p / ~p items~n",
-                      [length(ValidSids), length(AllSids)]),
-            sse(Req, status, <<"Ranking unavailable — showing results as received">>)
-    end,
-
-    %% Step 6 — synthesise a prose answer
-    sse(Req, status, <<"Generating answer...">>),
-    Answer = queen:synthesize(Query, Ranked),
-    case Answer of
-        <<>> -> ok;
-        _    -> sse(Req, answer, Answer)
-    end,
+    NeutralScores = maps:from_list([{integer_to_binary(S), 0} || S <- AllSids]),
+    sse_reorder(Req, AllSids, NeutralScores),
 
     cowboy_req:stream_body(<<>>, fin, Req).
 
@@ -156,17 +146,21 @@ run_pipeline(Query, Req) ->
 %% Streaming disco collection
 %%====================================================================
 
-%%--------------------------------------------------------------------
 %% @private
-%% @doc Collects results from N spawned disco processes.
+%% @doc Collect results from `N' spawned disco processes.
 %%
-%% Accepts the first message that arrives regardless of which PID sent
-%% it, so all sub-queries and all disco nodes run truly in parallel.
-%% Streams each normalised item to the SSE client immediately.
+%% Waits for `{disco_result, Pid, Tag, Items}' messages from any of
+%% the spawned fan-out processes, in arrival order. Each item is
+%% normalised and immediately streamed to the SSE client via
+%% `sse_item/3'. Processes that do not respond within 8 seconds are
+%% silently dropped.
 %%
-%% Returns [{Sid :: integer(), RawItem :: map()}].
+%% Returns `[{Sid :: non_neg_integer(), RawItem :: map()}]' in
+%% arrival order.
 %% @end
-%%--------------------------------------------------------------------
+-spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
+                               list(), non_neg_integer()) ->
+    [{non_neg_integer(), map()}].
 collect_disco_streaming(0, _Req, Acc, _Counter) ->
     lists:reverse(Acc);
 collect_disco_streaming(Remaining, Req, Acc, Counter) ->
@@ -192,6 +186,15 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
 %% Deduplication (tagged)
 %%====================================================================
 
+%% @private
+%% @doc Deduplicate a list of `{Sid, Item}' pairs by URL.
+%%
+%% Items without a URL are always kept. Among items sharing the same
+%% URL, the first occurrence (lowest Sid, earliest arrival) wins.
+%% Preserves arrival order in the output.
+%% @end
+-spec deduplicate_tagged([{non_neg_integer(), map()}]) ->
+    [{non_neg_integer(), map()}].
 deduplicate_tagged(TaggedItems) ->
     {Uniq, _} = lists:foldl(fun({Sid, Item}, {Acc, Seen}) ->
         Props = maps:get(<<"properties">>, Item, #{}),
@@ -242,8 +245,15 @@ first_defined(Props, [Key | Rest], Default) ->
 %% Disco HTTP
 %%====================================================================
 
-%% Url is resolved once in run_pipeline and passed down to avoid
-%% reading the config file once per spawned process.
+%% @private
+%% @doc POST a query to a single disco node and decode the JSON response.
+%%
+%% `Url' must be a fully-qualified POST endpoint, for example
+%% `"http://localhost:8080/query"'. Returns `{ok, Map}' on a 200
+%% response with valid JSON, `{error, Reason}' otherwise.
+%% @end
+-spec fetch_from_disco(binary(), string()) ->
+    {ok, map()} | {error, term()}.
 fetch_from_disco(Body, Url) ->
     case httpc:request(post,
                        {Url, [], "application/json",
@@ -260,6 +270,10 @@ fetch_from_disco(Body, Url) ->
 %% SSE helpers
 %%====================================================================
 
+%% @private
+%% @doc Send a `status' or `error' SSE event to the client.
+%% @end
+-spec sse(cowboy_req:req(), atom(), binary()) -> ok.
 sse(Req, Type, Message) ->
     Payload = iolist_to_binary(json:encode(#{
         <<"type">>    => atom_to_binary(Type, utf8),
@@ -267,6 +281,10 @@ sse(Req, Type, Message) ->
     })),
     cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
 
+%% @private
+%% @doc Send an `item' SSE event for a single result card.
+%% @end
+-spec sse_item(cowboy_req:req(), non_neg_integer(), map()) -> ok.
 sse_item(Req, Sid, Item) ->
     Payload = iolist_to_binary(json:encode(#{
         <<"type">> => <<"item">>,
@@ -275,6 +293,10 @@ sse_item(Req, Sid, Item) ->
     })),
     cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
 
+%% @private
+%% @doc Send a `reorder' SSE event with the final sid list and scores.
+%% @end
+-spec sse_reorder(cowboy_req:req(), [non_neg_integer()], map()) -> ok.
 sse_reorder(Req, Sids, ScoresMap) ->
     Payload = iolist_to_binary(json:encode(#{
         <<"type">>   => <<"reorder">>,
