@@ -1,19 +1,31 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% emquest_sup — Top-Level Supervisor
+%%% @doc Emquest top-level supervisor.
 %%%
-%%% Starts the Cowboy HTTP listener only when http mode is enabled.
+%%% Starts the Cowboy HTTP listener when HTTP mode is enabled and
+%%% registers the URL routing table. Runs with a `one_for_one'
+%%% strategy — the supervisor itself has no child workers beyond
+%%% the Cowboy listener, which is managed by Ranch internally.
 %%%
-%%% HTTP is enabled (default) unless:
-%%%   - env var  EMQUEST_HTTP=false
-%%%   - app env  {http, false} in emquest.app.src
+%%% === Routing table ===
 %%%
-%%% Usage:
-%%%   # Full mode (HTTP + CLI)
-%%%   rebar3 shell
+%%% ```
+%%% GET  /                → emquest_handler (serves index.html)
+%%% POST /query           → emquest_handler (SSE pipeline)
+%%% GET  /favicon.ico     → cowboy_static   (priv/static/favicon.ico)
+%%% GET  /static/[...]    → cowboy_static   (priv/static/)
+%%% '''
 %%%
-%%%   # CLI only (no HTTP server)
-%%%   EMQUEST_HTTP=false rebar3 shell
+%%% === Modes ===
+%%%
+%%% Full mode (HTTP + CLI):
+%%% ```
+%%% rebar3 shell
+%%% '''
+%%%
+%%% CLI only (no HTTP server):
+%%% ```
+%%% EMQUEST_HTTP=false rebar3 shell
+%%% '''
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -22,9 +34,19 @@
 
 -export([start_link/0, init/1]).
 
+%% @doc Start the top-level supervisor.
+%% @end
+-spec start_link() -> supervisor:startlink_ret().
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%% @doc Initialise the supervisor.
+%%
+%% In HTTP mode, compiles the Cowboy routing table and starts the
+%% TCP listener on the configured port (default: 8079).
+%% In CLI-only mode, returns an empty child list.
+%% @end
+-spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
     case http_enabled() of
         true ->
@@ -53,15 +75,25 @@ init([]) ->
 %% Internal
 %%====================================================================
 
+%% @private
+%% @doc Returns `true' if HTTP mode is enabled.
+%%
+%% Mirrors {@link emquest_app:http_enabled/0}. Duplicated here to
+%% avoid a cross-module call during supervisor `init/1'.
+%% @end
+-spec http_enabled() -> boolean().
 http_enabled() ->
     case os:getenv("EMQUEST_HTTP") of
         "false" -> false;
         "0"     -> false;
         _       ->
-            %% Fall back to app env (default: true)
             application:get_env(emquest, http, true)
     end.
 
+%% @private
+%% @doc Returns the configured HTTP port, defaulting to 8079.
+%% @end
+-spec get_port() -> inet:port_number().
 get_port() ->
     case application:get_env(emquest, port) of
         {ok, P} -> P;
