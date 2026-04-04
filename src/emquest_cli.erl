@@ -1,20 +1,31 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% emquest_cli — Interactive Shell Client
+%%% @doc Interactive shell client for Emquest.
 %%%
-%%% Merged from em_client into the emquest application.
-%%% Calls em_disco:query/1 directly (no HTTP round-trip) and prints
-%%% results to the console.
+%%% Provides a convenience interface for querying the Emergence
+%%% network directly from an `rebar3 shell' session.
 %%%
-%%% Usage from rebar3 shell:
-%%%   emquest_cli:query("google.com").
-%%%   emquest_cli:query(<<"some search">>).
+%%% Unlike {@link emquest_handler}, which runs the full pipeline
+%%% server-side, this module is a thin HTTP client: it POSTs the
+%%% search term to the running Emquest HTTP API and pretty-prints
+%%% the response.
 %%%
-%%% em_disco must be reachable from the same node.
-%%% In the rebar3 shell, add em_disco to your deps or start it first:
-%%%   application:ensure_all_started(em_disco).
+%%% The target URL is resolved in this order:
+%%% <ol>
+%%%   <li>`server_url' environment variable</li>
+%%%   <li>`server_url' key under `[em_disco]' in `emergence.conf'</li>
+%%%   <li>Default: `http://localhost:8080'</li>
+%%% </ol>
 %%%
-%%% @author Steve Roques
+%%% === Usage ===
+%%%
+%%% ```
+%%% emquest_cli:query("google.com").
+%%% emquest_cli:query(<<"what is erlang">>).
+%%% '''
+%%%
+%%% `inets' is started on demand so the function works even when
+%%% called before the application is fully booted.
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_cli).
@@ -44,6 +55,13 @@ query(Search) when is_binary(Search) ->
 %% HTTP
 %%====================================================================
 
+%% @private
+%% @doc POST `Body' (JSON) to the disco query endpoint.
+%%
+%% Returns `{ok, ResponseBody}' on HTTP 200, `{error, Reason}'
+%% otherwise. Timeout is 10 seconds.
+%% @end
+-spec post_to_disco(binary()) -> {ok, binary()} | {error, term()}.
 post_to_disco(Body) ->
     Url = disco_url() ++ "/query",
     case httpc:request(post,
@@ -54,6 +72,13 @@ post_to_disco(Body) ->
         {error, Reason}                  -> {error, Reason}
     end.
 
+%% @private
+%% @doc Resolve the em_disco base URL.
+%%
+%% Checks the `server_url' environment variable first, then reads
+%% `emergence.conf', then falls back to `http://localhost:8080'.
+%% @end
+-spec disco_url() -> string().
 disco_url() ->
     case os:getenv("server_url") of
         false ->
