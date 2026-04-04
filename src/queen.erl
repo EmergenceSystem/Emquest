@@ -1,47 +1,61 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% queen — LLM Query Expander, Ranker and Disco Registry
+%%% @doc LLM interface for query expansion, ranking, and synthesis.
 %%%
-%%% Responsibilities:
+%%% Provides three capabilities built on configurable LLM providers
+%%% (Mistral, Ollama, OpenAI, Claude):
 %%%
-%%%   expand/1      — expands a user query into sub-queries.
-%%%   rank/2        — ranks results by relevance via LLM.
-%%%   synthesize/2  — generates a prose answer from top results.
-%%%   disco_nodes/0 — returns the list of disco HTTP(S) base URLs.
+%%% <dl>
+%%%   <dt>`expand/1'</dt>
+%%%   <dd>Used by the default Emquest pipeline. Splits long queries
+%%%       into 2-3 focused sub-queries to improve agent recall.</dd>
 %%%
-%%% === Node URL resolution ===
+%%%   <dt>`rank/2'</dt>
+%%%   <dd>Re-ranks a list of results by relevance to the original
+%%%       query. <em>Not called by the default Emquest pipeline.</em>
+%%%       Available for external clients (MCP, EmPy, custom
+%%%       integrations) that want LLM-assisted ranking.</dd>
 %%%
-%%% Reads the [em_disco] section from emergence.conf.
-%%% Accepts entries as host:port or bare host:
+%%%   <dt>`synthesize/2'</dt>
+%%%   <dd>Generates a prose answer from the top-ranked results.
+%%%       <em>Not called by the default Emquest pipeline.</em>
+%%%       Available for external clients that want a summary
+%%%       alongside raw results.</dd>
+%%% </dl>
 %%%
-%%%   localhost              → http://localhost:8080
-%%%   localhost:8080         → http://localhost:8080
-%%%   localhost:9000         → http://localhost:9000
-%%%   em_disco.roques.me     → https://em_disco.roques.me
-%%%   em_disco.roques.me:443 → https://em_disco.roques.me
-%%%   em_disco.roques.me:8080→ http://em_disco.roques.me:8080
+%%% === LLM provider configuration (`emergence.conf') ===
 %%%
-%%% Rules:
-%%%   localhost / 127.0.0.1 always use http://
-%%%   port 443 uses https:// and omits the port from the URL
-%%%   any other explicit port uses http:// with the port in the URL
-%%%   bare remote host defaults to https:// on port 443
+%%% ```
+%%% [llm]
+%%% provider      = mistral
+%%% model         = mistral-small-latest
+%%% temperature   = 0.3
+%%% system_prompt = You are a search assistant. Be concise.
+%%% '''
 %%%
-%%% === Configuration (emergence.conf) ===
+%%% Supported providers: `mistral', `ollama', `openai', `claude'.
 %%%
-%%%   [em_disco]
-%%%   nodes        = localhost:8080, em_disco.roques.me
-%%%   registry_url = https://em_disco.roques.me/nodes.json
-%%%   registry_ttl = 300
-%%%   use_registry = true
+%%% === Node URL resolution (`disco_nodes/0') ===
 %%%
-%%%   [llm]
-%%%   provider      = mistral
-%%%   model         = mistral-small-latest
-%%%   temperature   = 0.1
-%%%   system_prompt = ...
+%%% Reads the `[em_disco]' section from `emergence.conf'.
+%%% Accepts entries as `host:port' or bare host:
 %%%
-%%% @author Steve Roques
+%%% ```
+%%% localhost              -> http://localhost:8080
+%%% localhost:8080         -> http://localhost:8080
+%%% localhost:9000         -> http://localhost:9000
+%%% em_disco.roques.me     -> https://em_disco.roques.me
+%%% em_disco.roques.me:443 -> https://em_disco.roques.me
+%%% em_disco.roques.me:8080-> http://em_disco.roques.me:8080
+%%% '''
+%%%
+%%% Resolution rules:
+%%% <ul>
+%%%   <li>`localhost' and `127.0.0.1' always use `http://'</li>
+%%%   <li>Port 443 uses `https://' and omits the port from the URL</li>
+%%%   <li>Any other explicit port uses `http://' with the port</li>
+%%%   <li>Bare remote host defaults to `https://' on port 443</li>
+%%% </ul>
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(queen).
@@ -58,6 +72,21 @@
 %% Query expansion
 %%====================================================================
 
+%% @doc Expand a query into focused sub-queries for agent fan-out.
+%%
+%% Short queries (under 25 bytes) are returned as-is without an LLM
+%% call — the original query is sufficient for direct fan-out.
+%% For longer queries, the configured LLM extracts 2-3 search
+%% keywords or sub-queries.
+%%
+%% The original query is always the first element of the returned
+%% list, ensuring it is always included in the fan-out regardless
+%% of what the LLM returns.
+%%
+%% This is the only `queen' function called by the default Emquest
+%% pipeline. See {@link rank/2} and {@link synthesize/2} for
+%% optional LLM capabilities available to external clients.
+%% @end
 -spec expand(binary()) -> [binary()].
 expand(Query) when byte_size(Query) < 25 ->
     [Query];
@@ -85,6 +114,19 @@ expand(Query) ->
 %% Synthesis
 %%====================================================================
 
+%% @doc Generate a prose answer from the top-ranked results.
+%%
+%% Formats the top 5 items from `RankedItems' as context and asks
+%% the configured LLM to answer `Query' in 2-4 plain-text sentences.
+%% The system prompt is read from the `[llm]' section of
+%% `emergence.conf', falling back to a default search assistant prompt.
+%%
+%% <em>Not called by the default Emquest pipeline.</em> Available
+%% for external clients (MCP, EmPy, custom integrations) that want
+%% a prose summary alongside raw results.
+%%
+%% Returns `<<>>' if the LLM call fails or returns empty text.
+%% @end
 -spec synthesize(binary(), [map()]) -> binary().
 synthesize(Query, RankedItems) ->
     Conf      = read_llm_conf(),
@@ -117,6 +159,19 @@ synthesize(Query, RankedItems) ->
 %% Result ranking
 %%====================================================================
 
+%% @doc Re-rank a list of result maps by relevance to `Query'.
+%%
+%% Returns the same items in a new order with a `<<"score">>' key
+%% added to each (0-3, where 3 is most relevant). Items not covered
+%% by the LLM ranking are appended at the end in their original order.
+%%
+%% <em>Not called by the default Emquest pipeline.</em> Available
+%% for external clients that want LLM-assisted ranking after
+%% collecting results from {@link emquest_handler} or directly from
+%% em_disco.
+%%
+%% Returns the input list unchanged if `Items' is empty.
+%% @end
 -spec rank(binary(), [map()]) -> [map()].
 rank(_Query, []) -> [];
 rank(Query, Items) ->
