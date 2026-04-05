@@ -7,7 +7,7 @@
 %%% <dl>
 %%%   <dt>`expand/1'</dt>
 %%%   <dd>Used by the default Emquest pipeline. Splits long queries
-%%%       into 2-3 focused sub-queries to improve agent recall.</dd>
+%%%       into 2–3 focused sub-queries to improve agent recall.</dd>
 %%%
 %%%   <dt>`rank/2'</dt>
 %%%   <dd>Re-ranks a list of results by relevance to the original
@@ -22,7 +22,7 @@
 %%%       alongside raw results.</dd>
 %%% </dl>
 %%%
-%%% === LLM provider configuration (`emergence.conf') ===
+%%% === Configuration (`emergence.conf') ===
 %%%
 %%% ```
 %%% [llm]
@@ -74,10 +74,9 @@
 
 %% @doc Expand a query into focused sub-queries for agent fan-out.
 %%
-%% Short queries (under 25 bytes) are returned as-is without an LLM
-%% call — the original query is sufficient for direct fan-out.
-%% For longer queries, the configured LLM extracts 2-3 search
-%% keywords or sub-queries.
+%% Short queries (under 25 bytes) are returned as-is — no LLM call
+%% is made. For longer queries, the configured LLM extracts 2–3
+%% search keywords or sub-queries.
 %%
 %% The original query is always the first element of the returned
 %% list, ensuring it is always included in the fan-out regardless
@@ -116,16 +115,14 @@ expand(Query) ->
 
 %% @doc Generate a prose answer from the top-ranked results.
 %%
-%% Formats the top 5 items from `RankedItems' as context and asks
-%% the configured LLM to answer `Query' in 2-4 plain-text sentences.
-%% The system prompt is read from the `[llm]' section of
-%% `emergence.conf', falling back to a default search assistant prompt.
+%% Formats the top 5 items as context and asks the configured LLM
+%% to answer `Query' in 2–4 plain-text sentences.
 %%
 %% <em>Not called by the default Emquest pipeline.</em> Available
 %% for external clients (MCP, EmPy, custom integrations) that want
 %% a prose summary alongside raw results.
 %%
-%% Returns `<<>>' if the LLM call fails or returns empty text.
+%% Returns `<<>>' if the LLM call fails.
 %% @end
 -spec synthesize(binary(), [map()]) -> binary().
 synthesize(Query, RankedItems) ->
@@ -162,7 +159,7 @@ synthesize(Query, RankedItems) ->
 %% @doc Re-rank a list of result maps by relevance to `Query'.
 %%
 %% Returns the same items in a new order with a `<<"score">>' key
-%% added to each (0-3, where 3 is most relevant). Items not covered
+%% added to each (0–3, where 3 is most relevant). Items not covered
 %% by the LLM ranking are appended at the end in their original order.
 %%
 %% <em>Not called by the default Emquest pipeline.</em> Available

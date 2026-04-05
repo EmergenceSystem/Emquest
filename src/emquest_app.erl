@@ -12,10 +12,8 @@
 %%% === HTTP mode control ===
 %%%
 %%% HTTP is enabled by default. It can be disabled via:
-%%% <ul>
-%%%   <li>Environment variable: `EMQUEST_HTTP=false' or `EMQUEST_HTTP=0'</li>
-%%%   <li>Application env: `{http, false}' in sys.config</li>
-%%% </ul>
+%%%   - Environment variable: `EMQUEST_HTTP=false' or `EMQUEST_HTTP=0'
+%%%   - Application env:      `{http, false}' in sys.config
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -26,8 +24,7 @@
 
 %% @doc Start the Emquest application.
 %%
-%% Installs a primary logger filter to suppress OTP progress reports,
-%% ensures `inets' is running, then conditionally starts `cowboy'
+%% Ensures `inets' is running, then conditionally starts `cowboy'
 %% before handing off to {@link emquest_sup}.
 %% @end
 -spec start(application:start_type(), term()) ->

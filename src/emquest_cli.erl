@@ -4,16 +4,15 @@
 %%% Provides a convenience interface for querying the Emergence
 %%% network directly from an `rebar3 shell' session.
 %%%
-%%% Unlike a browser client that goes through {@link emquest_handler},
-%%% this module calls em_disco directly — it POSTs the search term
-%%% to the configured em_disco HTTP API and pretty-prints the response.
+%%% A second client alongside the browser: unlike {@link emquest_handler},
+%%% which runs the full pipeline server-side, this module calls em_disco
+%%% directly — it POSTs the search term to the em_disco HTTP API and
+%%% pretty-prints the raw response.
 %%%
 %%% The target URL is resolved in this order:
-%%% <ol>
-%%%   <li>`server_url' environment variable</li>
-%%%   <li>`server_url' key under `[em_disco]' in `emergence.conf'</li>
-%%%   <li>Default: `http://localhost:8080'</li>
-%%% </ol>
+%%%   1. `server_url' environment variable
+%%%   2. `server_url' key under `[em_disco]' in `emergence.conf'
+%%%   3. Default: `http://localhost:8080'
 %%%
 %%% === Usage ===
 %%%

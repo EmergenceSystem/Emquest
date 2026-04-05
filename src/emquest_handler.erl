@@ -1,12 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc Cowboy HTTP handler — SSE streaming pipeline.
 %%%
-%%% Handles two routes registered by {@link emquest_sup}:
+%%% Handles two routes:
 %%%
-%%% ```
-%%% GET  /       → serves priv/templates/index.html
-%%% POST /query  → streams results as Server-Sent Events
-%%% '''
+%%%   GET  /       → serves `priv/templates/index.html'
+%%%   POST /query  → streams results as Server-Sent Events
 %%%
 %%% === SSE event types ===
 %%%
@@ -150,10 +148,13 @@ run_pipeline(Query, Req) ->
 %% @doc Collect results from `N' spawned disco processes.
 %%
 %% Waits for `{disco_result, Pid, Tag, Items}' messages from any of
-%% the spawned fan-out processes, in arrival order. Each item is
-%% normalised and immediately streamed to the SSE client via
-%% `sse_item/3'. Processes that do not respond within 8 seconds are
-%% silently dropped.
+%% the spawned fan-out processes. Accepts messages in arrival order
+%% regardless of which process sent them, so all sub-queries and all
+%% disco nodes truly run in parallel.
+%%
+%% Each item is normalised and streamed to the SSE client immediately
+%% via `sse_item/3'. If a process does not respond within 8 seconds
+%% it is silently dropped.
 %%
 %% Returns `[{Sid :: non_neg_integer(), RawItem :: map()}]' in
 %% arrival order.
@@ -215,6 +216,14 @@ deduplicate_tagged(TaggedItems) ->
 %% Item normalisation
 %%====================================================================
 
+%% @private
+%% @doc Normalise a raw agent result map into a flat display item.
+%%
+%% Extracts `url', `label', `value', and `ips' from the result's
+%% `properties' map (or the top-level map if no `properties' key
+%% exists). Returns a map ready for JSON encoding and delivery to
+%% the browser.
+%% @end
 normalise_item(Item) ->
     Props = maps:get(<<"properties">>, Item, Item),
     Score = maps:get(<<"score">>, Item, 0),
@@ -294,7 +303,7 @@ sse_item(Req, Sid, Item) ->
     cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
 
 %% @private
-%% @doc Send a `reorder' SSE event with the final sid list and scores.
+%% @doc Send a `reorder' SSE event with the final ranked sid list and scores.
 %% @end
 -spec sse_reorder(cowboy_req:req(), [non_neg_integer()], map()) -> ok.
 sse_reorder(Req, Sids, ScoresMap) ->
