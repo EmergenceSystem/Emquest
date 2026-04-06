@@ -157,13 +157,14 @@ print_embryo(Item) ->
     Props  = maps:get(<<"properties">>, Item, Item),
     Type   = maps:get(<<"type">>, Item, <<"result">>),
 
-    Url    = maps:get(<<"url">>,    Props, undefined),
-    Title  = maps:get(<<"title">>,  Props,
-             maps:get(<<"label">>,  Props,
-             maps:get(<<"domain">>, Props, undefined))),
-    Resume = maps:get(<<"resume">>, Props,
-             maps:get(<<"value">>,  Props, undefined)),
-    Ips    = maps:get(<<"ips">>,    Props, undefined),
+    Url     = maps:get(<<"url">>,     Props, undefined),
+    Title   = maps:get(<<"title">>,   Props,
+              maps:get(<<"label">>,   Props,
+              maps:get(<<"domain">>,  Props, undefined))),
+    Resume  = maps:get(<<"resume">>,  Props,
+              maps:get(<<"value">>,   Props, undefined)),
+    Ips     = maps:get(<<"ips">>,     Props, undefined),
+    Content = maps:get(<<"content">>, Props, undefined),
 
     io:format("  ── ~s ──~n", [string:uppercase(binary_to_list(Type))]),
 
@@ -180,6 +181,10 @@ print_embryo(Item) ->
         _         ->
             IpStrs = [binary_to_list(Ip) || Ip <- Ips, is_binary(Ip)],
             io:format("  IPs: ~s~n", [string:join(IpStrs, ", ")])
+    end,
+    case Content of
+        undefined -> ok;
+        _         -> io:format("~ts~n", [Content])
     end,
     case Resume of
         undefined -> ok;
