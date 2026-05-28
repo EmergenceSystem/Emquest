@@ -55,6 +55,31 @@ init(Req0, index) ->
     end,
     {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), index};
 
+init(Req0, network) ->
+    Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
+    {Code, Body, CT} = case file:read_file(Path) of
+        {ok, Bin} -> {200, Bin, <<"text/html">>};
+        {error, R} ->
+            logger:error("[emquest] network.html read failed: ~p", [R]),
+            {500, <<"Internal Server Error">>, <<"text/plain">>}
+    end,
+    {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), network};
+
+init(Req0, network_peers) ->
+    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    PeerList = [begin
+        H  = maps:get(host,       P, <<"unknown">>),
+        QP = maps:get(query_port, P, undefined),
+        #{<<"host">>       => H,
+          <<"query_port">> => case QP of undefined -> null; _ -> QP end,
+          <<"routable">>   => QP =/= undefined}
+    end || P <- Peers],
+    Body = iolist_to_binary(json:encode(PeerList)),
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">>  => <<"application/json">>,
+        <<"cache-control">> => <<"no-cache">>
+    }, Body, Req0), network_peers};
+
 init(Req0, query) ->
     case cowboy_req:method(Req0) of
         <<"POST">> ->

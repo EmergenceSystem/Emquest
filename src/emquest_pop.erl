@@ -35,7 +35,7 @@
 -behaviour(gen_server).
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, peers_for_query/2]).
+-export([start_link/0, peers_for_query/2, all_peers/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Maximum number of peers this node maintains.
@@ -69,6 +69,18 @@ start_link() ->
     [{map(), float()}].
 peers_for_query(QueryVec, K) ->
     gen_server:call(?MODULE, {peers_for_query, QueryVec, K}, 15_000).
+
+%%--------------------------------------------------------------------
+%% @doc Return all known em_pop peers (used by the network view).
+%%
+%% Returns `[PeerMap]' — the full peer table up to MAX_PEERS entries,
+%% scored by similarity to the emquest capability vector so that the
+%% most relevant peers appear first. Returns `[]' when degraded.
+%% @end
+%%--------------------------------------------------------------------
+-spec all_peers() -> [map()].
+all_peers() ->
+    gen_server:call(?MODULE, all_peers, 5_000).
 
 %%====================================================================
 %% gen_server callbacks
@@ -110,6 +122,13 @@ handle_call({peers_for_query, QueryVec, K}, _From,
                 || {PeerMap, Score} <- Candidates,
                    maps:get(query_port, PeerMap, undefined) =/= undefined],
     {reply, lists:sublist(Routable, K), State};
+
+handle_call(all_peers, _From, #{node := undefined} = State) ->
+    {reply, [], State};
+handle_call(all_peers, _From, #{node := Node} = State) ->
+    Vec = em_filter_vec:from_capabilities(?EMQUEST_CAPS),
+    Candidates = em_pop_node:peers_for(Node, Vec, ?MAX_PEERS),
+    {reply, [P || {P, _Score} <- Candidates], State};
 
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.

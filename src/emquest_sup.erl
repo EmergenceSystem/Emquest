@@ -11,6 +11,8 @@
 %%% ```
 %%% GET  /                → emquest_handler (serves index.html)
 %%% POST /query           → emquest_handler (SSE pipeline)
+%%% GET  /network         → emquest_handler (serves network.html)
+%%% GET  /network/peers   → emquest_handler (JSON peer list)
 %%% GET  /favicon.ico     → cowboy_static   (priv/static/favicon.ico)
 %%% GET  /static/[...]    → cowboy_static   (priv/static/)
 %%% '''
@@ -53,10 +55,12 @@ init([]) ->
             Port     = get_port(),
             Dispatch = cowboy_router:compile([
                 {'_', [
-                    {"/",             emquest_handler, index},
-                    {"/query",        emquest_handler, query},
-                    {"/favicon.ico",  cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
-                    {"/static/[...]", cowboy_static,   {priv_dir,  emquest, "static"}}
+                    {"/",               emquest_handler, index},
+                    {"/query",          emquest_handler, query},
+                    {"/network",        emquest_handler, network},
+                    {"/network/peers",  emquest_handler, network_peers},
+                    {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
+                    {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}
             ]),
             {ok, _} = cowboy:start_clear(emquest_listener,

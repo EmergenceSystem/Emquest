@@ -2,25 +2,23 @@
 
 Emquest is the web gateway of the [Emergence](https://github.com/EmergenceSystem)
 distributed discovery network — a streaming, multi-agent search interface built on
-[em_disco](https://github.com/EmergenceSystem/em_disco).
-
-![Screenshot](https://github.com/EmergenceSystem/Emquest/blob/main/emquest.png)
+[em_filter](https://hex.pm/packages/em_filter)'s em-pop gossip protocol.
 
 ---
 
 ## Philosophy
 
-Emergence is a distributed discovery network. Agents connect to a shared bus
-(`em_disco`) and each contributes a different type of result — web pages, DNS records,
-RSS/Atom feeds, GitHub repositories, anything. There is no central index: results are
-fetched live from agents as they respond.
+Emergence is a distributed discovery network. Filter agents connect via em-pop gossip
+and each contributes a different type of result — web pages, DNS records, RSS/Atom feeds,
+numbers, anything. There is no central index: results are fetched live from agents as
+they respond.
 
-Emquest is the web gateway. It fans out each query across every connected disco node
-and every sub-query in parallel — a cartesian product of `nodes × sub-queries`. Results
-stream to the browser as they arrive. Deduplication by URL absorbs any overlap between
-nodes or sub-queries. The UI adapts automatically to whatever result types agents return.
+Emquest is the web gateway. It fans out each query across every em-pop peer in parallel.
+Results stream to the browser as they arrive. Deduplication by URL (or by label for
+generic results) absorbs any overlap. The UI adapts automatically to whatever result
+types agents return.
 
-A network where anyone can run their own agents on a shared discovery bus — without
+A network where anyone can run their own filter agents on a shared gossip ring — without
 giving up local-only sources.
 
 ---
@@ -28,24 +26,25 @@ giving up local-only sources.
 ## Architecture
 
 ```
-Browser / EmPy / MCP client
+Browser
      │
      ▼
- emquest :8079          ← this project
-  ├── HTTP SSE stream   (POST /query)
-  ├── emquest_cli       (rebar3 shell)
-  └── queen             (LLM query expansion)
+ emquest :8079            ← this project
+  ├── GET  /              — search UI (streaming SSE)
+  ├── POST /query         — SSE pipeline
+  ├── GET  /network       — em-pop network view
+  ├── GET  /network/peers — JSON peer list
+  └── emquest_pop         — em-pop gossip node (port 9300)
      │
-     ▼  fan-out: N disco nodes × M sub-queries (all parallel)
- em_disco :8080+
-  ├── agent_registry    (ETS)
-  └── WebSocket bus
+     ▼  gossip discovery + direct HTTP fan-out
+ em-pop ring
+  ├──▶ em_filter_example :9201   (numbers demo filter)
+  ├──▶ dns_filter                (DNS lookups)
+  ├──▶ web_filter                (web search)
+  └──▶ … any em_filter agent
      │
-     ├──▶ dns_filter
-     ├──▶ web_filter
-     ├──▶ atom_filter
-     ├──▶ reddit_filter
-     └──▶ … any em_agent (em_filter contract)
+     ▼  gossip bootstrap
+ em_disco :9100
 ```
 
 ---
@@ -54,14 +53,15 @@ Browser / EmPy / MCP client
 
 - **Live streaming** — result cards appear as each agent responds, then reorder once
   all results are in
-- **Heterogeneous results** — web links, DNS records, RSS/Atom entries, and any future
+- **Heterogeneous results** — web links, DNS records, generic cards, and any future
   agent type rendered automatically
-- **Cartesian fan-out** — N disco nodes × M sub-queries all queried in parallel;
-  deduplication by URL absorbs overlap
+- **em-pop fan-out** — peers discovered via gossip; top-K by semantic similarity
+  queried in parallel for each sub-query
 - **LLM query expansion** — long queries are broken into focused sub-queries via
   `queen:expand/1` before fan-out
-- **Type-aware UI** — web results show title + URL + summary; DNS results show domain +
-  record type badge + IP list
+- **Deduplication** — by URL for web results; by label for generic cards
+- **Network view** — `GET /network` shows all discovered em-pop peers with routable
+  status, auto-refreshes every 15 s
 - **Shell client** — `emquest_cli:query/1` for direct use without the HTTP layer
 - **Minimal runtime** — HTTP server is optional, disable it with a single env var
 
@@ -71,9 +71,9 @@ Browser / EmPy / MCP client
 
 - Erlang/OTP 27+
 - [rebar3](https://rebar3.org)
-- [em_disco](https://github.com/EmergenceSystem/em_disco) running and reachable
-- At least one [em_agent](https://github.com/EmergenceSystem/em_agent) connected to
-  em_disco
+- [em_disco](https://github.com/EmergenceSystem/em_disco) running as a gossip bootstrap
+  seed (or any em-pop node to seed from)
+- At least one [em_filter](https://hex.pm/packages/em_filter) agent in the gossip ring
 - *(Optional)* An LLM configured in `emergence.conf` for query expansion
 
 ---
@@ -103,7 +103,11 @@ Emquest shares the same config file as the rest of the Emergence ecosystem.
 
 ```ini
 [em_disco]
-nodes = localhost:8080, em-disco.roques.me
+pop_port = 9100
+
+[emquest]
+port     = 8079
+pop_port = 9300
 
 [llm]
 provider    = mistral
@@ -111,16 +115,11 @@ model       = mistral-small-latest
 temperature = 0.3
 ```
 
+The `[em_disco] pop_port` is the UDP gossip port emquest uses to seed its peer table
+(contacts em_disco at startup). `[emquest] pop_port` is emquest's own gossip listen
+port.
+
 Supported LLM providers: `mistral`, `ollama`, `openai`, `claude`.
-
-Node URL resolution:
-
-| Entry | Resolved as |
-|-------|-------------|
-| `localhost` | `http://localhost:8080` |
-| `localhost:9000` | `http://localhost:9000` |
-| `em-disco.roques.me` | `https://em-disco.roques.me` |
-| `em-disco.roques.me:8080` | `http://em-disco.roques.me:8080` |
 
 ---
 
@@ -137,6 +136,10 @@ Open [http://localhost:8079](http://localhost:8079) in your browser.
 Type a query and hit **Enter**. Results stream in as agents respond. Once all agents
 have replied, results are reordered and deduplicated.
 
+**Network view:** [http://localhost:8079/network](http://localhost:8079/network) shows
+all em-pop peers Emquest has discovered, with their host, query port, and routable
+status. Refreshes automatically every 15 s.
+
 ### CLI only — no HTTP server
 
 ```bash
@@ -150,33 +153,6 @@ emquest_cli:query("google.com").
 emquest_cli:query(<<"what is erlang">>).
 ```
 
-Output example:
-
-```
-[emquest] querying: google.com
-
-  ── DNS ──
-  google.com
-  IPs: 172.217.22.78
-
-  ── URL ──
-  https://github.com/googlecombd
-    googlecombd (User)
-
-[emquest] 2 result(s)
-```
-
-### Python client (EmPy)
-
-EmPy is a standalone Python client that queries em_disco directly.
-
-```bash
-python EmPy.py "google.com"
-```
-
-Reads the same `emergence.conf` for the em_disco server URL. Requires no Erlang
-runtime.
-
 ---
 
 ## Project Structure
@@ -185,12 +161,15 @@ runtime.
 src/
   emquest_app.erl      — OTP application entry point, conditional Cowboy boot
   emquest_sup.erl      — top-level supervisor, HTTP listener + routing table
-  emquest_handler.erl  — Cowboy SSE handler (GET / and POST /query), full pipeline
-  emquest_cli.erl      — interactive shell client, calls emquest HTTP API
-  queen.erl            — LLM expand/1 for query expansion; rank/2 and synthesize/2
-                         exported for external clients, not used in default pipeline
+  emquest_handler.erl  — Cowboy handler: GET /, POST /query (SSE), GET /network,
+                         GET /network/peers
+  emquest_pop.erl      — em-pop gossip node manager; peers_for_query/2, all_peers/0
+  emquest_cli.erl      — interactive shell client
+  queen.erl            — LLM expand/1 for query expansion
 priv/
-  templates/index.html — single-page application shell
+  templates/
+    index.html         — search single-page application
+    network.html       — em-pop network view
   static/
     emergence.js       — SSE client, live card rendering, reorder animation
     style.css          — dark terminal UI
@@ -206,24 +185,37 @@ automatic based on the fields present in each result:
 
 | Fields present | Rendered as |
 |---------------|-------------|
-| `url` + optional `title` + `resume` | Clickable web result — title (or URL if no title), URL line, summary |
-| `ips` + `domain` | DNS result — domain with record type badge, IP badges |
-| anything else | Generic — label + value |
+| `url` + optional `label` + `value` | Clickable web result |
+| `ips` + `domain` | DNS result — domain + IP badges |
+| `label` + `value` (no url) | Generic card — label + value, deduplicated by label |
 
 New agent types require no changes to Emquest — the UI adapts automatically.
 
 ---
 
-## SSE Event Protocol
+## HTTP API
 
-`POST /query` streams newline-delimited Server-Sent Events:
+### POST /query
+
+Streams Server-Sent Events:
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `status` | `{"message": "..."}` | Progress line (expanding, querying, collecting) |
-| `item` | `{"sid": N, "item": {...}}` | Single result card, streamed immediately as received |
-| `reorder` | `{"sids": [...], "scores": {...}}` | Final deduped order after all agents respond; duplicates removed from the browser |
+| `status` | `{"message": "..."}` | Progress line |
+| `item` | `{"sid": N, "item": {...}}` | Single result card |
+| `reorder` | `{"sids": [...], "scores": {...}}` | Final deduped order |
 | `error` | `{"message": "..."}` | Pipeline error |
+
+### GET /network/peers
+
+Returns the current em-pop peer table as a JSON array:
+
+```json
+[
+  {"host": "127.0.0.1", "query_port": 9201, "routable": true},
+  {"host": "192.168.1.5", "query_port": null, "routable": false}
+]
+```
 
 ---
 

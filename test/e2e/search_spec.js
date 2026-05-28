@@ -62,4 +62,24 @@ test.describe('EmergenceSystem full-stack search', () => {
     expect(has7, `Expected a label with "7" but got: ${labels.join(', ')}`).toBe(true);
   });
 
+  test('network page discovers em_pop peers', async ({ page }) => {
+    await page.goto('/network');
+
+    // Stats block must render
+    await expect(page.locator('#stats')).toBeVisible();
+
+    // Wait until peer count is populated (replaces the initial "—")
+    await page.waitForFunction(() => {
+      const el = document.getElementById('stat-peers');
+      return el && el.textContent !== '—';
+    }, { timeout: 30_000 });
+
+    const peerText = await page.locator('#stat-peers').textContent();
+    expect(parseInt(peerText ?? '0', 10)).toBeGreaterThanOrEqual(1);
+
+    // At least one peer card should appear in the grid
+    const firstCard = page.locator('#agents-grid .agent-card').first();
+    await firstCard.waitFor({ state: 'visible', timeout: 5_000 });
+  });
+
 });

@@ -80,20 +80,21 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 /* ================================================================== */
-/* Agent count                                                        */
+/* Peer count (from local em-pop table)                               */
 /* ================================================================== */
-async function refreshAgentCount() {
+async function refreshPeerCount() {
     try {
-        const r = await fetch('http://localhost:8080/registry');
+        const r = await fetch('/network/peers');
         if (!r.ok) return;
-        const d = await r.json();
-        const n = (d.agents || []).length;
+        const peers = await r.json();
+        const n  = Array.isArray(peers) ? peers.length : 0;
         const el = document.getElementById('footer-agent-count');
-        if (el) el.textContent = `${n} agent${n !== 1 ? 's' : ''} connected`;
+        if (el) el.textContent = `${n} peer${n !== 1 ? 's' : ''} · network ↗`;
+        if (el) { el.style.cursor = 'pointer'; el.onclick = () => location.href = '/network'; }
     } catch (_) {}
 }
-refreshAgentCount();
-setInterval(refreshAgentCount, 15000);
+refreshPeerCount();
+setInterval(refreshPeerCount, 15000);
 
 /* ================================================================== */
 /* Textarea auto-resize                                               */

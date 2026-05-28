@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emquest · Network</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:           #060a08;
+            --surface:      #0b1210;
+            --surface-2:    #111a15;
+            --border:       rgba(0, 220, 100, 0.10);
+            --border-hi:    rgba(0, 220, 100, 0.32);
+            --green:        #00dc64;
+            --green-dim:    #00a84c;
+            --green-glow:   rgba(0, 220, 100, 0.13);
+            --blue:         #3dd6f5;
+            --amber:        #f5a623;
+            --red:          #f54b4b;
+            --muted:        rgba(0, 220, 100, 0.38);
+            --text-primary: rgba(255, 255, 255, 0.90);
+            --text-sec:     rgba(200, 230, 210, 0.65);
+            --font-mono:    'IBM Plex Mono', monospace;
+            --font-sans:    'IBM Plex Sans', sans-serif;
+        }
+
+        html { font-size: 15px; -webkit-font-smoothing: antialiased; }
+
+        body {
+            background: var(--bg);
+            color: var(--green);
+            font-family: var(--font-mono);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── Canvas ─────────────────────────────────────────────── */
+        #bg-canvas {
+            position: fixed; inset: 0;
+            width: 100%; height: 100%;
+            pointer-events: none; z-index: 0; opacity: 0.30;
+        }
+
+        /* ── Layout ─────────────────────────────────────────────── */
+        .page {
+            position: relative; z-index: 1;
+            max-width: 900px; margin: 0 auto;
+            padding: 3rem 2rem 6rem;
+        }
+
+        /* ── Header ─────────────────────────────────────────────── */
+        .header {
+            display: flex; align-items: flex-start;
+            justify-content: space-between; gap: 2rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 2rem; margin-bottom: 2.5rem;
+        }
+
+        .logo { display: flex; align-items: center; gap: 0.85rem; }
+        .logo-mark { display: flex; flex-direction: column; gap: 3px; }
+        .logo-dot {
+            display: block; width: 6px; height: 6px;
+            background: var(--green); border-radius: 50%;
+            animation: logoBreath 3s ease-in-out infinite;
+        }
+        .logo-dot:nth-child(2) { animation-delay: 0.4s; opacity: 0.7; }
+        .logo-dot:nth-child(3) { animation-delay: 0.8s; opacity: 0.45; }
+        @keyframes logoBreath { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+        .logo-text { display: flex; flex-direction: column; gap: 2px; }
+        .logo-name {
+            font-size: 1.1rem; font-weight: 600;
+            letter-spacing: 0.2em; color: var(--green);
+        }
+        .logo-sub {
+            font-size: 0.68rem; color: var(--muted);
+            letter-spacing: 0.12em;
+        }
+
+        .header-right { text-align: right; }
+        .pulse-row { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.3rem; }
+        .pulse-dot {
+            display: block; width: 7px; height: 7px;
+            background: var(--green); border-radius: 50%;
+            box-shadow: 0 0 6px var(--green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%,100% { opacity:1; box-shadow: 0 0 6px var(--green); }
+            50%      { opacity:0.4; box-shadow: none; }
+        }
+        .status-label { font-size: 0.7rem; color: var(--green); letter-spacing: 0.1em; }
+        .clock { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.05em; }
+
+        /* ── Stats row ───────────────────────────────────────────── */
+        .stats {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 1px; margin-bottom: 2.5rem;
+            border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+        }
+        .stat {
+            background: var(--surface);
+            padding: 1.1rem 1.25rem;
+            border-right: 1px solid var(--border);
+        }
+        .stat:last-child { border-right: none; }
+        .stat-value {
+            font-size: 1.6rem; font-weight: 600;
+            color: var(--green); line-height: 1;
+            margin-bottom: 0.3rem;
+        }
+        .stat-label {
+            font-size: 0.65rem; color: var(--muted);
+            letter-spacing: 0.1em; text-transform: uppercase;
+        }
+
+        /* ── Section title ───────────────────────────────────────── */
+        .section-title {
+            font-size: 0.65rem; font-weight: 600;
+            letter-spacing: 0.2em; color: var(--muted);
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+            display: flex; align-items: center; gap: 0.75rem;
+        }
+        .section-title::after {
+            content: ''; flex: 1; height: 1px;
+            background: var(--border);
+        }
+
+        /* ── Peer grid ───────────────────────────────────────────── */
+        .agents-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .agent-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--green-dim);
+            border-radius: 10px;
+            padding: 1rem 1.1rem;
+            opacity: 0; transform: translateY(8px);
+            animation: cardIn 0.28s cubic-bezier(0.4,0,0.2,1) forwards;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .agent-card:hover {
+            border-color: var(--border-hi);
+            background: var(--surface-2);
+        }
+        .agent-card--gossip { border-left-color: var(--muted); }
+        @keyframes cardIn { to { opacity: 1; transform: translateY(0); } }
+
+        .agent-name {
+            font-size: 0.88rem; font-weight: 500;
+            color: var(--text-primary); margin-bottom: 0.5rem;
+            display: flex; align-items: center; gap: 0.5rem;
+        }
+        .agent-dot {
+            width: 5px; height: 5px; border-radius: 50%;
+            background: var(--green); flex-shrink: 0;
+            box-shadow: 0 0 4px var(--green);
+        }
+        .agent-dot--gossip {
+            background: var(--muted); box-shadow: none;
+        }
+
+        .caps { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.6rem; }
+        .cap {
+            font-size: 0.62rem; letter-spacing: 0.06em;
+            color: var(--blue);
+            background: rgba(61, 214, 245, 0.07);
+            border: 1px solid rgba(61, 214, 245, 0.18);
+            border-radius: 3px; padding: 0.1rem 0.4rem;
+        }
+        .cap--gossip {
+            color: var(--muted);
+            background: transparent;
+            border-color: var(--border);
+        }
+        .agent-addr {
+            font-size: 0.65rem; color: var(--muted);
+            letter-spacing: 0.03em; font-family: var(--font-mono);
+        }
+
+        /* ── Error state ─────────────────────────────────────────── */
+        .error-msg {
+            background: rgba(245,75,75,0.05);
+            border: 1px solid rgba(245,75,75,0.2);
+            border-radius: 10px; padding: 1.25rem 1.5rem;
+            color: var(--red); font-size: 0.85rem;
+            display: flex; align-items: center; gap: 0.75rem;
+        }
+
+        /* ── Footer ──────────────────────────────────────────────── */
+        .footer {
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+            background: rgba(6,10,8,0.92);
+            border-top: 1px solid var(--border);
+            padding: 0 2rem; height: 36px;
+            display: flex; align-items: center; gap: 0.75rem;
+            font-size: 0.68rem; color: var(--muted);
+            backdrop-filter: blur(10px);
+        }
+        .footer-sep { opacity: 0.4; }
+        .footer a { color: var(--muted); text-decoration: none; transition: color 0.15s; }
+        .footer a:hover { color: var(--green); }
+
+        /* ── Responsive ──────────────────────────────────────────── */
+        @media (max-width: 600px) {
+            .page { padding: 2rem 1rem 5rem; }
+            .stats { grid-template-columns: 1fr 1fr; }
+            .stat:nth-child(3) { border-right: none; border-top: 1px solid var(--border); grid-column: 1 / -1; }
+            .header { flex-direction: column; gap: 1rem; }
+            .header-right { text-align: left; }
+            .pulse-row { justify-content: flex-start; }
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+
+<div class="page">
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-mark">
+                <span class="logo-dot"></span>
+                <span class="logo-dot"></span>
+                <span class="logo-dot"></span>
+            </div>
+            <div class="logo-text">
+                <span class="logo-name">EMQUEST</span>
+                <span class="logo-sub">em-pop network view</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="pulse-row">
+                <span class="pulse-dot"></span>
+                <span class="status-label">LIVE</span>
+            </div>
+            <div id="clock" class="clock"></div>
+        </div>
+    </header>
+
+    <!-- Stats -->
+    <div class="stats" id="stats">
+        <div class="stat">
+            <div class="stat-value" id="stat-peers">—</div>
+            <div class="stat-label">peers discovered</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="stat-routable">—</div>
+            <div class="stat-label">routable</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">em-pop</div>
+            <div class="stat-label">gossip protocol</div>
+        </div>
+    </div>
+
+    <!-- Peer list -->
+    <div class="section-title">discovered peers</div>
+    <div class="agents-grid" id="agents-grid">
+        <div style="color:var(--muted);font-size:0.8rem;grid-column:1/-1">Polling peer table…</div>
+    </div>
+
+</div>
+
+<!-- Footer -->
+<footer class="footer">
+    <span>EMERGENCE</span>
+    <span class="footer-sep">·</span>
+    <a href="/">← search</a>
+    <span class="footer-sep">·</span>
+    <span id="footer-count">loading…</span>
+</footer>
+
+<script>
+/* ── Canvas ───────────────────────────────────────────────────────── */
+(function () {
+    const canvas = document.getElementById('bg-canvas');
+    const ctx    = canvas.getContext('2d');
+    let dots = [];
+
+    function resize() {
+        canvas.width  = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const spacing = canvas.width / 36;
+        const rows    = Math.ceil(canvas.height / spacing) + 1;
+        dots = [];
+        for (let r = 0; r <= rows; r++)
+            for (let c = 0; c <= 36; c++)
+                dots.push({
+                    x: c * spacing, y: r * spacing,
+                    phase: Math.random() * Math.PI * 2,
+                    speed: 0.3 + Math.random() * 0.5
+                });
+    }
+
+    function draw(ts) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const t = ts * 0.001;
+        dots.forEach(d => {
+            const a = 0.04 + 0.04 * Math.sin(t * d.speed + d.phase);
+            ctx.beginPath();
+            ctx.arc(d.x, d.y, 1.4, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(0,220,100,${a})`;
+            ctx.fill();
+        });
+        requestAnimationFrame(draw);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    requestAnimationFrame(draw);
+})();
+
+/* ── Clock ────────────────────────────────────────────────────────── */
+function tick() {
+    const el = document.getElementById('clock');
+    if (!el) return;
+    const n = new Date(), p = v => String(v).padStart(2, '0');
+    el.textContent =
+        `${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())} `
+        + `${p(n.getHours())}:${p(n.getMinutes())}:${p(n.getSeconds())}`;
+}
+setInterval(tick, 1000);
+tick();
+
+/* ── Peers ────────────────────────────────────────────────────────── */
+function escHtml(s) {
+    return String(s || '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderPeers(peers) {
+    const grid    = document.getElementById('agents-grid');
+    const statP   = document.getElementById('stat-peers');
+    const statR   = document.getElementById('stat-routable');
+    const footer  = document.getElementById('footer-count');
+
+    const routableCount = peers.filter(p => p.routable).length;
+    statP.textContent  = peers.length;
+    statR.textContent  = routableCount;
+    footer.textContent = `${peers.length} peer${peers.length !== 1 ? 's' : ''} discovered`;
+
+    if (peers.length === 0) {
+        grid.innerHTML = `<div style="color:var(--muted);font-size:0.8rem;grid-column:1/-1">No peers discovered yet — gossip is running.</div>`;
+        return;
+    }
+
+    grid.innerHTML = '';
+    peers.forEach((peer, i) => {
+        const routable = peer.routable;
+        const addr = routable
+            ? `${peer.host}:${peer.query_port}`
+            : String(peer.host);
+        const card = document.createElement('div');
+        card.className = 'agent-card' + (routable ? '' : ' agent-card--gossip');
+        card.style.animationDelay = `${Math.min(i * 40, 600)}ms`;
+        card.innerHTML = `
+            <div class="agent-name">
+                <span class="agent-dot${routable ? '' : ' agent-dot--gossip'}"></span>
+                ${escHtml(addr)}
+            </div>
+            <div class="caps">
+                <span class="cap${routable ? '' : ' cap--gossip'}">${routable ? 'routable' : 'gossip only'}</span>
+            </div>
+            ${routable ? `<div class="agent-addr">query port ${escHtml(String(peer.query_port))}</div>` : ''}
+        `;
+        grid.appendChild(card);
+    });
+}
+
+function showError(msg) {
+    const grid   = document.getElementById('agents-grid');
+    const statP  = document.getElementById('stat-peers');
+    const statR  = document.getElementById('stat-routable');
+    const footer = document.getElementById('footer-count');
+    if (grid) grid.innerHTML = `
+        <div class="error-msg" style="grid-column:1/-1">
+            <span>⚠</span><span>Could not load peers: ${escHtml(msg)}</span>
+        </div>`;
+    if (statP)  statP.textContent  = '—';
+    if (statR)  statR.textContent  = '—';
+    if (footer) footer.textContent = 'peer table unavailable';
+}
+
+async function loadPeers() {
+    try {
+        const r = await fetch('/network/peers');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const peers = await r.json();
+        renderPeers(Array.isArray(peers) ? peers : []);
+    } catch (err) {
+        showError(err.message);
+    }
+}
+
+loadPeers();
+setInterval(loadPeers, 15000);
+</script>
+</body>
+</html>
