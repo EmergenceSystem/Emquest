@@ -123,7 +123,10 @@ run_pipeline(Query, Req) ->
     %% Runs in parallel with the disco fan-out above.
     QueryVec = em_filter_vec:from_capabilities(SubQueries),
     PopPeers = try emquest_pop:peers_for_query(QueryVec, 10)
-               catch _:_ -> []   %% emquest_pop not running (CLI mode)
+               catch
+                   exit:{noproc, _}       -> [];  %% emquest_pop not started
+                   exit:{timeout, _}      -> [];  %% gen_server call timeout
+                   error:badarg           -> []   %% malformed vector (defensive)
                end,
     PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
 
