@@ -94,7 +94,8 @@ init(Opts) ->
     NodeOpts = #{port            => Port,
                  vector          => Vec,
                  max_peers       => ?MAX_PEERS,
-                 gossip_interval => 5_000},
+                 gossip_interval => 5_000,
+                 stale_timeout   => 300_000},  %% 5 min: full round with 30 peers at 5s/peer = 150s
     case em_pop_node:start_link(NodeOpts) of
         {ok, NodePid} ->
             lists:foreach(fun({H, P}) ->
