@@ -92,8 +92,16 @@ init(Opts) ->
                       [Port, length(Seeds)]),
             {ok, #{node => NodePid}};
         {error, Reason} ->
-            {stop, {em_pop_node_start_failed, Reason}}
+            ?LOG_WARNING("[emquest_pop] em_pop_node failed to start on port ~w,"
+                         " running degraded (no em_pop routing): ~p",
+                         [Port, Reason]),
+            {ok, #{node => undefined}}
     end.
+
+handle_call({peers_for_query, _QueryVec, _K}, _From,
+            #{node := undefined} = State) ->
+    %% Degraded mode — em_pop_node failed to start.
+    {reply, [], State};
 
 handle_call({peers_for_query, QueryVec, K}, _From,
             #{node := Node} = State) ->
