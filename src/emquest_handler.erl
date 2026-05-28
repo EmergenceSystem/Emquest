@@ -68,9 +68,11 @@ init(Req0, network) ->
 init(Req0, network_peers) ->
     Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
     PeerList = [begin
-        H  = maps:get(host,       P, <<"unknown">>),
-        QP = maps:get(query_port, P, undefined),
+        H    = maps:get(host,       P, <<"unknown">>),
+        QP   = maps:get(query_port, P, undefined),
+        Name = maps:get(name,       P, <<>>),
         #{<<"host">>       => H,
+          <<"name">>       => Name,
           <<"query_port">> => case QP of undefined -> null; _ -> QP end,
           <<"routable">>   => QP =/= undefined}
     end || P <- Peers],
@@ -172,11 +174,14 @@ run_pipeline(Query, Req) ->
     logger:notice("[emquest] ~p response(s) collected (~p workers)",
                   [length(DedupedTagged), TotalWorkers]),
 
-    %% Step 6 — send reorder event so the browser reconciles arrival order.
-    AllSids       = [S || {S, _} <- DedupedTagged],
-    NeutralScores = maps:from_list(
-                        [{integer_to_binary(S), 0} || S <- AllSids]),
-    sse_reorder(Req, AllSids, NeutralScores),
+    %% Step 6 — score by text match, sort best-first, send reorder event.
+    ScoredPairs = [{Sid, text_score(SubQueries, Item)}
+                   || {Sid, Item} <- DedupedTagged],
+    SortedSids  = [S || {S, _} <- lists:sort(
+                       fun({_, A}, {_, B}) -> A >= B end, ScoredPairs)],
+    ScoresMap   = maps:from_list(
+                      [{integer_to_binary(S), Sc} || {S, Sc} <- ScoredPairs]),
+    sse_reorder(Req, SortedSids, ScoresMap),
 
     cowboy_req:stream_body(<<>>, fin, Req).
 
@@ -383,6 +388,42 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         end
     end)
     || Q <- SubQueries, {PeerMap, _Score} <- Peers].
+
+%%====================================================================
+%% Text scoring
+%%====================================================================
+
+%% @private
+%% @doc Score a raw result item by how many sub-query terms appear in its text.
+%%
+%% Checks all text fields (title, label, resume, value, description, url)
+%% against each lower-cased sub-query. A match anywhere yields +3; missing
+%% yields 0. The total is summed across all sub-queries so that items
+%% relevant to more sub-terms rank higher.
+%%
+%% This is intentionally simple — exact substring match, no stemming.
+%% It reliably boosts results that contain the literal search term (e.g.
+%% "turingdb") over unrelated items from feeds that ignore the query.
+%% @end
+-spec text_score([binary()], map()) -> non_neg_integer().
+text_score([], _Item) -> 0;
+text_score(SubQueries, RawItem) ->
+    Props = maps:get(<<"properties">>, RawItem, RawItem),
+    AllText = lists:foldl(fun(Key, Acc) ->
+        case maps:get(Key, Props, <<>>) of
+            B when is_binary(B) -> <<Acc/binary, " ", B/binary>>;
+            _ -> Acc
+        end
+    end, <<>>, [<<"title">>, <<"label">>, <<"resume">>,
+                <<"value">>, <<"description">>, <<"url">>]),
+    Lower = list_to_binary(string:lowercase(binary_to_list(AllText))),
+    lists:sum([
+        case binary:match(Lower,
+                 list_to_binary(string:lowercase(binary_to_list(Q)))) of
+            nomatch -> 0;
+            _       -> 3
+        end
+    || Q <- SubQueries, byte_size(Q) > 0]).
 
 %%====================================================================
 %% SSE helpers

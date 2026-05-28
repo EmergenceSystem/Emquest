@@ -361,22 +361,23 @@ function renderPeers(peers) {
 
     grid.innerHTML = '';
     peers.forEach((peer, i) => {
-        const routable = peer.routable;
-        const addr = routable
+        const routable    = peer.routable;
+        const addr        = routable
             ? `${peer.host}:${peer.query_port}`
             : String(peer.host);
+        const displayName = peer.name ? peer.name : addr;
         const card = document.createElement('div');
         card.className = 'agent-card' + (routable ? '' : ' agent-card--gossip');
         card.style.animationDelay = `${Math.min(i * 40, 600)}ms`;
         card.innerHTML = `
             <div class="agent-name">
                 <span class="agent-dot${routable ? '' : ' agent-dot--gossip'}"></span>
-                ${escHtml(addr)}
+                ${escHtml(displayName)}
             </div>
             <div class="caps">
                 <span class="cap${routable ? '' : ' cap--gossip'}">${routable ? 'routable' : 'gossip only'}</span>
             </div>
-            ${routable ? `<div class="agent-addr">query port ${escHtml(String(peer.query_port))}</div>` : ''}
+            ${routable ? `<div class="agent-addr">${escHtml(addr)}</div>` : ''}
         `;
         grid.appendChild(card);
     });
