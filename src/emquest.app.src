@@ -1,16 +1,27 @@
 {application, emquest, [
-    {description, "Client Emquest"},
-    {vsn, "0.1.0"},
-    {registered, []},
+    {description, "Client Emquest — semantic search dispatcher"},
+    {vsn, "0.2.0"},
+    {registered, [emquest_pop]},
     {mod, {emquest_app, []}},
     {applications, [
         kernel,
         stdlib,
         inets,
-        cowboy
+        cowboy,
+        kvex
     ]},
     {env, []},
-    {modules, []},
+    {modules, [
+        emquest_app,
+        emquest_sup,
+        emquest_handler,
+        emquest_pop,
+        emquest_cli,
+        queen,
+        em_filter_vec,
+        em_pop_node,
+        em_pop_http
+    ]},
     {licenses, ["Apache 2.0"]},
     {links, [{"GitHub", "https://github.com/EmergenceSystem/Emquest"}]}
 ]}.
