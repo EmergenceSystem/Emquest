@@ -5,12 +5,12 @@ const { test, expect } = require('@playwright/test');
  * Full-stack end-to-end tests for EmergenceSystem.
  *
  * Prerequisites (must all be running before executing these tests):
- *   1. em_disco          — gossip port 9100, query port 9101
+ *   1. em_disco          — gossip port 9100
  *   2. em_filter_example — gossip port 9200, query port 9201
- *   3. emquest           — HTTP port 8079,   gossip port 9300
+ *   3. emquest           — HTTP port 8079, gossip port 9300
  *
- * em_pop gossip propagates within ~5 s of startup, so emquest discovers
- * em_filter_example through em_disco before the first test runs.
+ * em_filter_example corpus: integers 1–20 with one arithmetic property each.
+ * Labels have no URL — they render as generic cards in emquest.
  *
  * Start all three:
  *   em_disco/:         rebar3 shell
@@ -21,46 +21,45 @@ const { test, expect } = require('@playwright/test');
 
 test.describe('EmergenceSystem full-stack search', () => {
 
-  test('query "erlang" returns at least one Erlang-related result', async ({ page }) => {
+  test('query "1" returns numbers whose label contains "1"', async ({ page }) => {
     await page.goto('/');
 
-    // Verify page loads (empty state is visible)
+    // Verify empty state before search
     await expect(page.locator('#empty-state')).toBeVisible();
 
-    // Submit search
-    await page.fill('#query-input', 'erlang');
+    // Submit the digit query
+    await page.fill('#query-input', '1');
     await page.click('#send-btn');
 
-    // Wait for at least one result card to appear
+    // Wait for at least one result card
     const firstCard = page.locator('#results-list .item-card').first();
     await firstCard.waitFor({ state: 'visible', timeout: 30_000 });
 
-    // Collect all visible titles
-    const titles = await page.locator('#results-list .item-title').allTextContents();
-    expect(titles.length).toBeGreaterThan(0);
+    // Generic number cards use .item-title for the label
+    const labels = await page.locator('#results-list .item-title').allTextContents();
+    expect(labels.length, 'Expected at least one result').toBeGreaterThan(0);
 
-    // At least one result must contain "Erlang" (case-insensitive)
-    const hasErlang = titles.some(t => /erlang/i.test(t));
-    expect(hasErlang, `Expected an Erlang result but got: ${titles.join(', ')}`).toBe(true);
+    // At least one label must contain the digit "1"
+    const hasOne = labels.some(l => l.includes('1'));
+    expect(hasOne, `Expected a label with "1" but got: ${labels.join(', ')}`).toBe(true);
   });
 
-  test('query "emergence" returns at least one EmergenceSystem result', async ({ page }) => {
+  test('query "7" returns numbers whose label contains "7"', async ({ page }) => {
     await page.goto('/');
 
     await expect(page.locator('#empty-state')).toBeVisible();
 
-    await page.fill('#query-input', 'emergence');
+    await page.fill('#query-input', '7');
     await page.click('#send-btn');
 
     const firstCard = page.locator('#results-list .item-card').first();
     await firstCard.waitFor({ state: 'visible', timeout: 30_000 });
 
-    const titles = await page.locator('#results-list .item-title').allTextContents();
-    expect(titles.length).toBeGreaterThan(0);
+    const labels = await page.locator('#results-list .item-title').allTextContents();
+    expect(labels.length).toBeGreaterThan(0);
 
-    // At least one result must mention "Emergence" or "emergence"
-    const hasEmergence = titles.some(t => /emergence/i.test(t));
-    expect(hasEmergence, `Expected an EmergenceSystem result but got: ${titles.join(', ')}`).toBe(true);
+    const has7 = labels.some(l => l.includes('7'));
+    expect(has7, `Expected a label with "7" but got: ${labels.join(', ')}`).toBe(true);
   });
 
 });
