@@ -215,13 +215,23 @@ deduplicate_tagged(TaggedItems) ->
     {Uniq, _} = lists:foldl(fun({Sid, Item}, {Acc, Seen}) ->
         Props = maps:get(<<"properties">>, Item, #{}),
         Url   = maps:get(<<"url">>, Props, <<>>),
-        case Url of
-            <<>> ->
+        %% When no URL, fall back to label-based dedup so that generic
+        %% cards (e.g. number items without a URL) are not duplicated
+        %% when the same agent is queried by multiple sub-queries or
+        %% when there are multiple em_pop peer entries for the same host.
+        Label = maps:get(<<"label">>, Item, <<>>),
+        Key = case Url of
+            <<>> when Label =/= <<>> -> {label, Label};
+            <<>>                     -> unique;
+            _                        -> {url, Url}
+        end,
+        case Key of
+            unique ->
                 {[{Sid, Item} | Acc], Seen};
             _ ->
-                case sets:is_element(Url, Seen) of
+                case sets:is_element(Key, Seen) of
                     true  -> {Acc, Seen};
-                    false -> {[{Sid, Item} | Acc], sets:add_element(Url, Seen)}
+                    false -> {[{Sid, Item} | Acc], sets:add_element(Key, Seen)}
                 end
         end
     end, {[], sets:new()}, lists:reverse(TaggedItems)),
