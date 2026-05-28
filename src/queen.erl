@@ -61,6 +61,7 @@
 -module(queen).
 
 -export([expand/1, rank/2, synthesize/2, disco_nodes/0,
+         pop_seeds/0, emquest_pop_port/0,
          conf_path/0, parse_conf/1]).
 
 -define(DEFAULT_SYSTEM_PROMPT,
@@ -249,6 +250,77 @@ disco_nodes() ->
             false -> Acc ++ [N]
         end
     end, Local, Remote).
+
+%%--------------------------------------------------------------------
+%% @doc Return em_pop bootstrap seed endpoints from `emergence.conf'.
+%%
+%% Reads host entries from `[em_disco] nodes' and the shared gossip
+%% port from `[em_disco] pop_port'.  Returns a `{Host, Port}' list
+%% that `emquest_pop:init/1' uses to seed Emquest's peer table.
+%%
+%% Returns `[]' when `pop_port' is absent — em_pop seeding is skipped
+%% and Emquest starts with an empty peer table (normal during early
+%% Phase 2 deployment when not all seeds are upgraded yet).
+%% @end
+%%--------------------------------------------------------------------
+-spec pop_seeds() -> [{string(), pos_integer()}].
+pop_seeds() ->
+    DiscoConf = read_disco_conf(),
+    case maps:get("pop_port", DiscoConf, undefined) of
+        undefined ->
+            [];
+        PortStr ->
+            PopPort = list_to_integer(string:trim(PortStr)),
+            Hosts   = extract_disco_hosts(DiscoConf),
+            [{H, PopPort} || H <- Hosts]
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc Return the em_pop listener port for the Emquest node.
+%%
+%% Reads `[emquest] pop_port' from `emergence.conf'. Default: 9100.
+%%
+%% Example:
+%%   [emquest]
+%%   pop_port = 9100
+%% @end
+%%--------------------------------------------------------------------
+-spec emquest_pop_port() -> pos_integer().
+emquest_pop_port() ->
+    case conf_path() of
+        undefined ->
+            9100;
+        Path ->
+            case file:read_file(Path) of
+                {ok, Bin} ->
+                    Section = maps:get("emquest", parse_conf(Bin), #{}),
+                    case maps:get("pop_port", Section, undefined) of
+                        undefined -> 9100;
+                        PortStr   -> list_to_integer(string:trim(PortStr))
+                    end;
+                _ ->
+                    9100
+            end
+    end.
+
+%% @private
+%% @doc Extract bare hostnames from `[em_disco] nodes' (strips ports).
+-spec extract_disco_hosts(map()) -> [string()].
+extract_disco_hosts(Conf) ->
+    NodesStr = maps:get("nodes", Conf,
+                   maps:get("host", Conf, "localhost")),
+    Entries  = string:split(NodesStr, ",", all),
+    lists:filtermap(fun(Entry) ->
+        case string:trim(Entry) of
+            "" -> false;
+            E  ->
+                H = case string:split(E, ":", trailing) of
+                    [Host, _Port] -> string:trim(Host);
+                    [Host]        -> string:trim(Host)
+                end,
+                {true, H}
+        end
+    end, Entries).
 
 %%--------------------------------------------------------------------
 %% @private
