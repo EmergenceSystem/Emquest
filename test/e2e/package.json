@@ -1,0 +1,12 @@
+{
+  "name": "emquest-e2e",
+  "version": "1.0.0",
+  "description": "Playwright end-to-end tests for the EmergenceSystem full stack",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
