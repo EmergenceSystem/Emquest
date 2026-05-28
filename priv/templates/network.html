@@ -199,7 +199,7 @@
         }
 
         /* ── Footer ──────────────────────────────────────────────── */
-        .footer {
+        .app-footer {
             position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
             background: rgba(6,10,8,0.92);
             border-top: 1px solid var(--border);
@@ -208,9 +208,10 @@
             font-size: 0.68rem; color: var(--muted);
             backdrop-filter: blur(10px);
         }
-        .footer-sep { opacity: 0.4; }
-        .footer a { color: var(--muted); text-decoration: none; transition: color 0.15s; }
-        .footer a:hover { color: var(--green); }
+        .footer-name { font-weight: 600; letter-spacing: 0.12em; }
+        .footer-sep  { opacity: 0.4; }
+        .footer-link { color: var(--muted); text-decoration: none; transition: color 0.15s; }
+        .footer-link:hover { color: var(--green); }
 
         /* ── Responsive ──────────────────────────────────────────── */
         @media (max-width: 600px) {
@@ -276,12 +277,12 @@
 </div>
 
 <!-- Footer -->
-<footer class="footer">
-    <span>EMERGENCE</span>
+<footer class="app-footer">
+    <span class="footer-name">EMERGENCE</span>
     <span class="footer-sep">·</span>
-    <a href="/">← search</a>
+    <a href="/" class="footer-link">← search</a>
     <span class="footer-sep">·</span>
-    <span id="footer-count">loading…</span>
+    <span id="footer-count" class="footer-info">loading…</span>
 </footer>
 
 <script>
