@@ -69,7 +69,16 @@ init([]) ->
             io:format("[emquest] HTTP disabled — shell only~n"),
             io:format("[emquest] Shell: emquest_cli:query(\"...\").~n")
     end,
-    {ok, {#{strategy => one_for_one, intensity => 5, period => 10}, []}}.
+    PopChild = #{
+        id       => emquest_pop,
+        start    => {emquest_pop, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [emquest_pop]
+    },
+    {ok, {#{strategy => one_for_one, intensity => 5, period => 10},
+          [PopChild]}}.
 
 %%====================================================================
 %% Internal
