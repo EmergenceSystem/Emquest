@@ -42,7 +42,7 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2]).
+-export([init/2, fetch_from_agent/2]).
 
 %%--------------------------------------------------------------------
 init(Req0, index) ->
@@ -97,45 +97,57 @@ handle_query(RawBody, Req0) ->
 -spec run_pipeline(binary(), cowboy_req:req()) -> ok.
 run_pipeline(Query, Req) ->
     logger:notice("[emquest] query: ~ts", [Query]),
-    %% Step 1 — expand query into sub-queries
+
+    %% Step 1 — expand query into sub-queries.
     sse(Req, status, <<"Expanding query...">>),
     SubQueries = queen:expand(Query),
 
-    %% Step 2 — discover all disco nodes (local + registry)
-    Nodes = queen:disco_nodes(),
+    %% Step 2 — disco fan-out: one process per (sub-query × disco node).
+    Nodes     = queen:disco_nodes(),
+    DiscoUrls = [Node ++ "/query" || Node <- Nodes],
+    Parent    = self(),
+    DiscoPids = [spawn(fun() ->
+                    Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
+                    Tag  = iolist_to_binary([Q, " @ ", Url]),
+                    case fetch_from_disco(Body, Url) of
+                        {ok, #{<<"embryo_list">> := Items}} ->
+                            Parent ! {disco_result, self(), Tag, Items};
+                        {error, R} ->
+                            logger:warning("[emquest] disco fail ~s: ~p",
+                                           [Tag, R]),
+                            Parent ! {disco_result, self(), Tag, []}
+                    end
+                 end) || Q <- SubQueries, Url <- DiscoUrls],
+
+    %% Step 3 — em_pop fan-out: query vector → top-K peers → direct HTTP.
+    %% Runs in parallel with the disco fan-out above.
+    QueryVec = em_filter_vec:from_capabilities(SubQueries),
+    PopPeers = try emquest_pop:peers_for_query(QueryVec, 10)
+               catch _:_ -> []   %% emquest_pop not running (CLI mode)
+               end,
+    PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
+
+    %% Report how many sources we are waiting on.
+    TotalWorkers = length(DiscoPids) + length(PopPids),
     sse(Req, status, iolist_to_binary([
-        "Querying ", integer_to_binary(length(Nodes)), " disco node(s) with ",
-        integer_to_binary(length(SubQueries)), " sub-query(ies)..."
+        "Querying ", integer_to_binary(length(DiscoUrls)),
+        " disco + ", integer_to_binary(length(PopPeers)),
+        " em_pop peer(s)..."
     ])),
 
-    %% Step 3 — cartesian fan-out: one spawn per (sub-query × disco node).
-    %% All processes run in parallel regardless of how many nodes there are.
-    %% Disco URLs are read once here so spawned closures reuse them.
-    Parent = self(),
-    DiscoUrls = [Node ++ "/query" || Node <- Nodes],
-    Pids = [spawn(fun() ->
-                Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
-                Tag  = iolist_to_binary([Q, " @ ", Url]),
-                case fetch_from_disco(Body, Url) of
-                    {ok, #{<<"embryo_list">> := Items}} ->
-                        Parent ! {disco_result, self(), Tag, Items};
-                    {error, R} ->
-                        logger:warning("[emquest] disco fail ~s: ~p", [Tag, R]),
-                        Parent ! {disco_result, self(), Tag, []}
-                end
-             end) || Q <- SubQueries, Url <- DiscoUrls],
+    %% Step 4 — collect all results (disco + em_pop), streaming each item.
+    TaggedItems = collect_disco_streaming(TotalWorkers, Req, [], 0),
 
-    %% Collect results, streaming each item immediately as it arrives.
-    TaggedItems = collect_disco_streaming(length(Pids), Req, [], 0),
-
-    %% Step 4 — deduplicate by URL (first occurrence wins)
+    %% Step 5 — deduplicate by URL (first occurrence wins).
     DedupedTagged = deduplicate_tagged(TaggedItems),
 
-    logger:notice("[emquest] ~p response(s) collected", [length(DedupedTagged)]),
+    logger:notice("[emquest] ~p response(s) collected (~p workers)",
+                  [length(DedupedTagged), TotalWorkers]),
 
-    %% Step 5 — send reorder to deduplicate browser-side (arrival order, no LLM ranking)
-    AllSids = [S || {S, _} <- DedupedTagged],
-    NeutralScores = maps:from_list([{integer_to_binary(S), 0} || S <- AllSids]),
+    %% Step 6 — send reorder event so the browser reconciles arrival order.
+    AllSids       = [S || {S, _} <- DedupedTagged],
+    NeutralScores = maps:from_list(
+                        [{integer_to_binary(S), 0} || S <- AllSids]),
     sse_reorder(Req, AllSids, NeutralScores),
 
     cowboy_req:stream_body(<<>>, fin, Req).
@@ -274,6 +286,65 @@ fetch_from_disco(Body, Url) ->
         {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
         {error, R}                 -> {error, R}
     end.
+
+%%--------------------------------------------------------------------
+%% @doc POST a query directly to one em_pop agent and return its items.
+%%
+%% `Url' is the full endpoint, e.g. `"http://agent.lan:9201/agent/query"'.
+%% Returns `{ok, [Item]}' on success — Items are the decoded results
+%% from the agent's `{"results": [...]}' response body.
+%%
+%% Returns `{error, Reason}' on any HTTP error, timeout, or bad JSON.
+%% @end
+%%--------------------------------------------------------------------
+-spec fetch_from_agent(binary(), string()) ->
+    {ok, [map()]} | {error, term()}.
+fetch_from_agent(Body, Url) ->
+    case httpc:request(post,
+                       {Url, [], "application/json",
+                        binary_to_list(Body)},
+                       [{timeout, 8000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, RespBody}} ->
+            try
+                #{<<"results">> := Items} = json:decode(RespBody),
+                case is_list(Items) of
+                    true  -> {ok, Items};
+                    false -> {ok, []}
+                end
+            catch _:_ -> {error, invalid_response} end;
+        {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
+        {error, R}                 -> {error, R}
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc Spawn one worker process per (sub-query × em_pop peer).
+%%
+%% Workers send `{disco_result, self(), Tag, Items}' to Parent —
+%% the same message pattern as disco workers so `collect_disco_streaming'
+%% handles both sources transparently.
+%%
+%% `Peers' is the list returned by `emquest_pop:peers_for_query/2':
+%%   `[{#{host := H, query_port := QP, ...}, Score}]'.
+%% @end
+%%--------------------------------------------------------------------
+-spec spawn_pop_workers([binary()], [{map(), float()}], pid()) -> [pid()].
+spawn_pop_workers(SubQueries, Peers, Parent) ->
+    [spawn(fun() ->
+        H   = binary_to_list(maps:get(host, PeerMap)),
+        QP  = maps:get(query_port, PeerMap),
+        Url = lists:flatten(
+                  io_lib:format("http://~s:~w/agent/query", [H, QP])),
+        Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
+        Tag  = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
+        case fetch_from_agent(Body, Url) of
+            {ok, Items} ->
+                Parent ! {disco_result, self(), Tag, Items};
+            {error, R} ->
+                logger:warning("[emquest] pop agent fail ~s: ~p", [Tag, R]),
+                Parent ! {disco_result, self(), Tag, []}
+        end
+    end)
+    || Q <- SubQueries, {PeerMap, _Score} <- Peers].
 
 %%====================================================================
 %% SSE helpers
