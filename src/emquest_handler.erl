@@ -231,8 +231,8 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
 %% Groups all {Sid, Item, RankInSource} triples by dedup key (URL or
 %% label).  For each group:
 %%   occ  = number of distinct sources that returned this URL
-%%   rrf  = sum of 1/(RankInSource + 60) across all occurrences
-%%   text = text_score of the representative item (first streamed)
+%%   rrf  = sum of 1/(RankInSource + 1 + 60) across all occurrences (1-based RRF, k=60)
+%%   text = max text_score across all items in the group
 %%   final_score = occ * 10 + rrf * 100 + text
 %%
 %% Note: occ and rrf are complementary — occ rewards breadth (how many
