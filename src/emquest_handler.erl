@@ -168,19 +168,11 @@ run_pipeline(Query, Req) ->
     %% Step 4 — collect all results (disco + em_pop), streaming each item.
     TaggedItems = collect_disco_streaming(TotalWorkers, Req, [], 0),
 
-    %% Step 5 — deduplicate by URL (first occurrence wins).
-    DedupedTagged = deduplicate_tagged(TaggedItems),
+    %% Step 5 — aggregate: group by URL, score by occurrence + RRF + text match.
+    logger:notice("[emquest] ~p result(s) collected (~p workers)",
+                  [length(TaggedItems), TotalWorkers]),
 
-    logger:notice("[emquest] ~p response(s) collected (~p workers)",
-                  [length(DedupedTagged), TotalWorkers]),
-
-    %% Step 6 — score by text match, sort best-first, send reorder event.
-    ScoredPairs = [{Sid, text_score(SubQueries, Item)}
-                   || {Sid, Item} <- DedupedTagged],
-    SortedSids  = [S || {S, _} <- lists:sort(
-                       fun({_, A}, {_, B}) -> A >= B end, ScoredPairs)],
-    ScoresMap   = maps:from_list(
-                      [{integer_to_binary(S), Sc} || {S, Sc} <- ScoredPairs]),
+    {SortedSids, ScoresMap} = aggregate_and_rank(TaggedItems, SubQueries),
     sse_reorder(Req, SortedSids, ScoresMap),
 
     cowboy_req:stream_body(<<>>, fin, Req).
@@ -201,12 +193,12 @@ run_pipeline(Query, Req) ->
 %% via `sse_item/3'. If a process does not respond within 8 seconds
 %% it is silently dropped.
 %%
-%% Returns `[{Sid :: non_neg_integer(), RawItem :: map()}]' in
-%% arrival order.
+%% Returns `[{Sid :: non_neg_integer(), RawItem :: map(),
+%% RankInSource :: non_neg_integer()}]' in arrival order.
 %% @end
 -spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
                                list(), non_neg_integer()) ->
-    [{non_neg_integer(), map()}].
+    [{non_neg_integer(), map(), non_neg_integer()}].
 collect_disco_streaming(0, _Req, Acc, _Counter) ->
     lists:reverse(Acc);
 collect_disco_streaming(Remaining, Req, Acc, Counter) ->
@@ -216,11 +208,11 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
                 "Got ", integer_to_binary(length(Items)),
                 " result(s) for: \"", Tag, "\""
             ])),
-            {NewAcc, NewCounter} = lists:foldl(fun(Item, {A, Ctr}) ->
+            {NewAcc, NewCounter} = lists:foldl(fun({Rank, Item}, {A, Ctr}) ->
                 NormItem = normalise_item(Item),
                 sse_item(Req, Ctr, NormItem),
-                {[{Ctr, Item} | A], Ctr + 1}
-            end, {Acc, Counter}, Items),
+                {[{Ctr, Item, Rank} | A], Ctr + 1}
+            end, {Acc, Counter}, lists:zip(lists:seq(0, length(Items) - 1), Items)),
             collect_disco_streaming(Remaining - 1, Req, NewAcc, NewCounter)
     after 8000 ->
         logger:warning("[emquest] disco timeout, ~p process(es) did not respond",
@@ -229,43 +221,71 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
     end.
 
 %%====================================================================
-%% Deduplication (tagged)
+%% Aggregation — occurrence count + Reciprocal Rank Fusion
 %%====================================================================
 
+%%--------------------------------------------------------------------
 %% @private
-%% @doc Deduplicate a list of `{Sid, Item}' pairs by URL.
+%% @doc Aggregate raw results by URL, score by occurrence + RRF + text.
 %%
-%% Items without a URL are always kept. Among items sharing the same
-%% URL, the first occurrence (lowest Sid, earliest arrival) wins.
-%% Preserves arrival order in the output.
+%% Groups all {Sid, Item, RankInSource} triples by dedup key (URL or
+%% label).  For each group:
+%%   occ  = number of distinct sources that returned this URL
+%%   rrf  = sum of 1/(RankInSource + 60) across all occurrences
+%%   text = text_score of the representative item (first streamed)
+%%   final_score = occ * 10 + rrf * 100 + text
+%%
+%% Returns {SortedSids, ScoresMap} where:
+%%   SortedSids — representative Sid per group, best score first
+%%   ScoresMap  — #{<<"Sid">> => FinalScore} for all representatives
 %% @end
--spec deduplicate_tagged([{non_neg_integer(), map()}]) ->
-    [{non_neg_integer(), map()}].
-deduplicate_tagged(TaggedItems) ->
-    {Uniq, _} = lists:foldl(fun({Sid, Item}, {Acc, Seen}) ->
-        Props = maps:get(<<"properties">>, Item, #{}),
-        Url   = maps:get(<<"url">>, Props, <<>>),
-        %% When no URL, fall back to label-based dedup so that generic
-        %% cards (e.g. number items without a URL) are not duplicated
-        %% when the same agent is queried by multiple sub-queries or
-        %% when there are multiple em_pop peer entries for the same host.
-        Label = maps:get(<<"label">>, Item, <<>>),
-        Key = case Url of
-            <<>> when Label =/= <<>> -> {label, Label};
-            <<>>                     -> unique;
-            _                        -> {url, Url}
-        end,
-        case Key of
-            unique ->
-                {[{Sid, Item} | Acc], Seen};
-            _ ->
-                case sets:is_element(Key, Seen) of
-                    true  -> {Acc, Seen};
-                    false -> {[{Sid, Item} | Acc], sets:add_element(Key, Seen)}
-                end
-        end
-    end, {[], sets:new()}, lists:reverse(TaggedItems)),
-    lists:reverse(Uniq).
+%%--------------------------------------------------------------------
+-spec aggregate_and_rank([{non_neg_integer(), map(), non_neg_integer()}],
+                          [binary()]) ->
+    {[non_neg_integer()], map()}.
+aggregate_and_rank(TaggedItems, SubQueries) ->
+    %% Group by dedup key; preserve first-streamed (lowest Sid) as representative.
+    Groups = lists:foldl(fun({Sid, Item, Rank}, Acc) ->
+        Key = dedup_key(Item),
+        Entry = {Sid, Item, Rank},
+        maps:update_with(Key, fun(Existing) -> [Entry | Existing] end,
+                         [Entry], Acc)
+    end, #{}, lists:reverse(TaggedItems)),  %% reverse so foldl keeps lowest Sid first
+
+    %% Score each group.
+    Scored = maps:fold(fun(_Key, Group, Acc) ->
+        {RepSid, RepItem, _} = hd(Group),
+        Occ  = length(Group),
+        RRF  = lists:sum([1.0 / (R + 60) || {_, _, R} <- Group]),
+        Text = text_score(SubQueries, RepItem),
+        Score = Occ * 10 + RRF * 100 + Text,
+        [{RepSid, Score} | Acc]
+    end, [], Groups),
+
+    %% Sort best score first.
+    Sorted     = lists:sort(fun({_, A}, {_, B}) -> A >= B end, Scored),
+    SortedSids = [S || {S, _} <- Sorted],
+    ScoresMap  = maps:from_list(
+        [{integer_to_binary(S), Sc} || {S, Sc} <- Sorted]),
+    {SortedSids, ScoresMap}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Extract the dedup key from a raw result item.
+%%
+%% Mirrors the logic previously in deduplicate_tagged/1.
+%% @end
+%%--------------------------------------------------------------------
+-spec dedup_key(map()) -> term().
+dedup_key(Item) ->
+    Props = maps:get(<<"properties">>, Item, Item),
+    Url   = maps:get(<<"url">>, Props, <<>>),
+    Label = maps:get(<<"label">>, Item, <<>>),
+    case Url of
+        <<>> when Label =/= <<>> -> {label, Label};
+        <<>>                     -> {unique, erlang:unique_integer()};
+        _                        -> {url, Url}
+    end.
 
 %%====================================================================
 %% Item normalisation
