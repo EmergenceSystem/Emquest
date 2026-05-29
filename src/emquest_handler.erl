@@ -235,6 +235,11 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
 %%   text = text_score of the representative item (first streamed)
 %%   final_score = occ * 10 + rrf * 100 + text
 %%
+%% Note: occ and rrf are complementary — occ rewards breadth (how many
+%% sources found it), rrf rewards rank quality within each source.
+%% They can overlap when multiple sub-queries hit the same source, which
+%% is acceptable since sub-query coverage is a genuine relevance signal.
+%%
 %% Returns {SortedSids, ScoresMap} where:
 %%   SortedSids — representative Sid per group, best score first
 %%   ScoresMap  — #{<<"Sid">> => FinalScore} for all representatives
@@ -254,10 +259,10 @@ aggregate_and_rank(TaggedItems, SubQueries) ->
 
     %% Score each group.
     Scored = maps:fold(fun(_Key, Group, Acc) ->
-        {RepSid, RepItem, _} = hd(Group),
+        {RepSid, _RepItem, _} = hd(Group),
         Occ  = length(Group),
-        RRF  = lists:sum([1.0 / (R + 60) || {_, _, R} <- Group]),
-        Text = text_score(SubQueries, RepItem),
+        RRF  = lists:sum([1.0 / (R + 1 + 60) || {_, _, R} <- Group]),
+        Text = lists:max([text_score(SubQueries, I) || {_, I, _} <- Group]),
         Score = Occ * 10 + RRF * 100 + Text,
         [{RepSid, Score} | Acc]
     end, [], Groups),
