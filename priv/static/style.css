@@ -457,10 +457,14 @@ a.item-title:hover,
 }
 .footer-name { font-weight: 600; letter-spacing: 0.12em; }
 .footer-sep  { opacity: 0.4; }
-.footer-drift { color: var(--muted); text-decoration: none; transition: color 0.15s; }
+.footer-drift,
+.footer-drift:visited {
+    color: var(--muted); text-decoration: none; transition: color 0.15s;
+}
 .footer-drift:hover { color: var(--green); }
 
-.drift-link {
+.drift-link,
+.drift-link:visited {
     font-size: 0.68rem; font-family: var(--font-mono);
     color: var(--muted); text-decoration: none; letter-spacing: 0.06em;
     transition: color 0.15s;
