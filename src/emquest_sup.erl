@@ -11,6 +11,8 @@
 %%% ```
 %%% GET  /                → emquest_handler (serves index.html)
 %%% POST /query           → emquest_handler (SSE pipeline)
+%%% GET  /drift           → emquest_handler (serves drift.html)
+%%% GET  /preview         → emquest_handler (URL description proxy)
 %%% GET  /network         → emquest_handler (serves network.html)
 %%% GET  /network/peers   → emquest_handler (JSON peer list)
 %%% GET  /favicon.ico     → cowboy_static   (priv/static/favicon.ico)
@@ -57,6 +59,8 @@ init([]) ->
                 {'_', [
                     {"/",               emquest_handler, index},
                     {"/query",          emquest_handler, query},
+                    {"/drift",          emquest_handler, drift},
+                    {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
                     {"/network/peers",  emquest_handler, network_peers},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},

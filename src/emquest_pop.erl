@@ -122,7 +122,8 @@ handle_call({peers_for_query, QueryVec, K}, _From,
     Routable = [{PeerMap, Score}
                 || {PeerMap, Score} <- Candidates,
                    maps:get(query_port, PeerMap, undefined) =/= undefined],
-    {reply, lists:sublist(Routable, K), State};
+    Unique = dedup_by_endpoint(Routable),
+    {reply, lists:sublist(Unique, K), State};
 
 handle_call(all_peers, _From, #{node := undefined} = State) ->
     {reply, [], State};
@@ -138,3 +139,30 @@ handle_cast(_Msg, State) -> {noreply, State}.
 handle_info(_Msg, State) -> {noreply, State}.
 
 terminate(_Reason, _State) -> ok.
+
+%%====================================================================
+%% Internal
+%%====================================================================
+
+%% @private
+%% @doc Deduplicate a scored peer list by {host, query_port}.
+%%
+%% Preserves order (best score first). When two entries share the same
+%% physical endpoint the first one (highest-scoring) is kept, which
+%% happens when a filter agent was restarted and gossip still carries
+%% both the old and the new ID.
+%% @end
+-spec dedup_by_endpoint([{map(), float()}]) -> [{map(), float()}].
+dedup_by_endpoint(Peers) ->
+    dedup_by_endpoint(Peers, sets:new([{version, 2}]), []).
+
+dedup_by_endpoint([], _Seen, Acc) ->
+    lists:reverse(Acc);
+dedup_by_endpoint([{PeerMap, Score} | Rest], Seen, Acc) ->
+    Key = {maps:get(host, PeerMap, undefined),
+           maps:get(query_port, PeerMap, undefined)},
+    case sets:is_element(Key, Seen) of
+        true  -> dedup_by_endpoint(Rest, Seen, Acc);
+        false -> dedup_by_endpoint(Rest, sets:add_element(Key, Seen),
+                                   [{PeerMap, Score} | Acc])
+    end.

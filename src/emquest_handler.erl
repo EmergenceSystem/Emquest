@@ -42,7 +42,10 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2]).
+-export([init/2, fetch_from_agent/2, fetch_preview/1]).
+
+%% Default trust assigned to em_pop peers that have no recorded trust score.
+-define(TRUST_INIT, 0.10).
 
 %%--------------------------------------------------------------------
 init(Req0, index) ->
@@ -54,6 +57,32 @@ init(Req0, index) ->
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
     {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), index};
+
+init(Req0, drift) ->
+    Path = filename:join([code:priv_dir(emquest), "templates", "drift.html"]),
+    {Code, Body, CT} = case file:read_file(Path) of
+        {ok, Bin} -> {200, Bin, <<"text/html">>};
+        {error, R} ->
+            logger:error("[emquest] drift.html read failed: ~p", [R]),
+            {500, <<"Internal Server Error">>, <<"text/plain">>}
+    end,
+    {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), drift};
+
+init(Req0, preview) ->
+    QS  = cowboy_req:parse_qs(Req0),
+    Url = proplists:get_value(<<"url">>, QS, <<>>),
+    {Code, Body} = case fetch_preview(Url) of
+        {ok, Desc} ->
+            JSON = iolist_to_binary(json:encode(#{<<"description">> => Desc})),
+            {200, JSON};
+        {error, _} ->
+            {200, <<"{\"description\":\"\"}">>}
+    end,
+    {ok, cowboy_req:reply(Code, #{
+        <<"content-type">>                => <<"application/json">>,
+        <<"cache-control">>               => <<"max-age=3600">>,
+        <<"access-control-allow-origin">> => <<"*">>
+    }, Body, Req0), preview};
 
 init(Req0, network) ->
     Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
@@ -138,11 +167,11 @@ run_pipeline(Query, Req) ->
                     Tag  = iolist_to_binary([Q, " @ ", Url]),
                     case fetch_from_disco(Body, Url) of
                         {ok, #{<<"embryo_list">> := Items}} ->
-                            Parent ! {disco_result, self(), Tag, Items};
+                            Parent ! {disco_result, self(), Tag, Q, Items, 1.0};
                         {error, R} ->
                             logger:warning("[emquest] disco fail ~s: ~p",
                                            [Tag, R]),
-                            Parent ! {disco_result, self(), Tag, []}
+                            Parent ! {disco_result, self(), Tag, Q, [], 1.0}
                     end
                  end) || Q <- SubQueries, Url <- DiscoUrls],
 
@@ -168,11 +197,11 @@ run_pipeline(Query, Req) ->
     %% Step 4 — collect all results (disco + em_pop), streaming each item.
     TaggedItems = collect_disco_streaming(TotalWorkers, Req, [], 0),
 
-    %% Step 5 — aggregate: group by URL, score by occurrence + RRF + text match.
+    %% Step 5 — aggregate: group by URL, rank by occ + trust-RRF + coverage + vec.
     logger:notice("[emquest] ~p result(s) collected (~p workers)",
                   [length(TaggedItems), TotalWorkers]),
 
-    {SortedSids, ScoresMap} = aggregate_and_rank(TaggedItems, SubQueries),
+    {SortedSids, ScoresMap} = aggregate_and_rank(TaggedItems, SubQueries, QueryVec),
     sse_reorder(Req, SortedSids, ScoresMap),
 
     cowboy_req:stream_body(<<>>, fin, Req).
@@ -184,26 +213,20 @@ run_pipeline(Query, Req) ->
 %% @private
 %% @doc Collect results from `N' spawned disco processes.
 %%
-%% Waits for `{disco_result, Pid, Tag, Items}' messages from any of
-%% the spawned fan-out processes. Accepts messages in arrival order
-%% regardless of which process sent them, so all sub-queries and all
-%% disco nodes truly run in parallel.
+%% Waits for `{disco_result, Pid, Tag, SubQuery, Items, Trust}' messages.
+%% SubQuery is the sub-query that produced this batch; Trust is the
+%% source trust score (1.0 for configured disco nodes, peer trust for em_pop).
 %%
-%% Each item is normalised and streamed to the SSE client immediately
-%% via `sse_item/3'. If a process does not respond within 8 seconds
-%% it is silently dropped.
-%%
-%% Returns `[{Sid :: non_neg_integer(), RawItem :: map(),
-%% RankInSource :: non_neg_integer()}]' in arrival order.
+%% Returns `[{Sid, RawItem, RankInSource, SubQuery, Trust}]' in arrival order.
 %% @end
 -spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
                                list(), non_neg_integer()) ->
-    [{non_neg_integer(), map(), non_neg_integer()}].
+    [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}].
 collect_disco_streaming(0, _Req, Acc, _Counter) ->
     lists:reverse(Acc);
 collect_disco_streaming(Remaining, Req, Acc, Counter) ->
     receive
-        {disco_result, _AnyPid, Tag, Items} ->
+        {disco_result, _AnyPid, Tag, SubQuery, Items, Trust} ->
             sse(Req, status, iolist_to_binary([
                 "Got ", integer_to_binary(length(Items)),
                 " result(s) for: \"", Tag, "\""
@@ -211,7 +234,7 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
             {NewAcc, NewCounter} = lists:foldl(fun({Rank, Item}, {A, Ctr}) ->
                 NormItem = normalise_item(Item),
                 sse_item(Req, Ctr, NormItem),
-                {[{Ctr, Item, Rank} | A], Ctr + 1}
+                {[{Ctr, Item, Rank, SubQuery, Trust} | A], Ctr + 1}
             end, {Acc, Counter}, lists:zip(lists:seq(0, length(Items) - 1), Items)),
             collect_disco_streaming(Remaining - 1, Req, NewAcc, NewCounter)
     after 8000 ->
@@ -245,25 +268,37 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
 %%   ScoresMap  — #{<<"Sid">> => FinalScore} for all representatives
 %% @end
 %%--------------------------------------------------------------------
--spec aggregate_and_rank([{non_neg_integer(), map(), non_neg_integer()}],
-                          [binary()]) ->
+-spec aggregate_and_rank(
+        [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}],
+        [binary()], binary()) ->
     {[non_neg_integer()], map()}.
-aggregate_and_rank(TaggedItems, SubQueries) ->
+aggregate_and_rank(TaggedItems, _SubQueries, QueryVec) ->
     %% Group by dedup key; preserve first-streamed (lowest Sid) as representative.
-    Groups = lists:foldl(fun({Sid, Item, Rank}, Acc) ->
-        Key = dedup_key(Item),
-        Entry = {Sid, Item, Rank},
+    Groups = lists:foldl(fun({Sid, Item, Rank, SubQ, Trust}, Acc) ->
+        Key   = dedup_key(Item),
+        Entry = {Sid, Item, Rank, SubQ, Trust},
         maps:update_with(Key, fun(Existing) -> [Entry | Existing] end,
                          [Entry], Acc)
     end, #{}, lists:reverse(TaggedItems)),  %% reverse so foldl keeps lowest Sid first
 
     %% Score each group.
     Scored = maps:fold(fun(_Key, Group, Acc) ->
-        {RepSid, _RepItem, _} = hd(Group),
-        Occ  = length(Group),
-        RRF  = lists:sum([1.0 / (R + 1 + 60) || {_, _, R} <- Group]),
-        Text = lists:max([text_score(SubQueries, I) || {_, I, _} <- Group]),
-        Score = Occ * 10 + RRF * 100 + Text,
+        {RepSid, _RepItem, _, _, _} = hd(Group),
+
+        %% Occurrence breadth — how many source batches returned this URL.
+        Occ = length(Group),
+
+        %% Trust-weighted RRF — a trusted source's rank-1 beats an unknown's.
+        RRF = lists:sum([Trust / (R + 1 + 60) || {_, _, R, _, Trust} <- Group]),
+
+        %% Sub-query coverage — how many distinct sub-queries this item satisfies.
+        SubQs    = sets:from_list([SQ || {_, _, _, SQ, _} <- Group], [{version, 2}]),
+        Coverage = sets:size(SubQs),
+
+        %% Semantic vector similarity — item text vs query vector.
+        VecScore = lists:max([item_vec_score(QueryVec, I) || {_, I, _, _, _} <- Group]),
+
+        Score = Occ * 10 + RRF * 100 + Coverage * 15 + VecScore * 20,
         [{RepSid, Score} | Acc]
     end, [], Groups),
 
@@ -398,18 +433,19 @@ fetch_from_agent(Body, Url) ->
 -spec spawn_pop_workers([binary()], [{map(), float()}], pid()) -> [pid()].
 spawn_pop_workers(SubQueries, Peers, Parent) ->
     [spawn(fun() ->
-        H   = binary_to_list(maps:get(host, PeerMap)),
-        QP  = maps:get(query_port, PeerMap),
-        Url = lists:flatten(
-                  io_lib:format("http://~s:~w/agent/query", [H, QP])),
-        Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
-        Tag  = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
+        H     = binary_to_list(maps:get(host, PeerMap)),
+        QP    = maps:get(query_port, PeerMap),
+        Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
+        Url   = lists:flatten(
+                    io_lib:format("http://~s:~w/agent/query", [H, QP])),
+        Body  = iolist_to_binary(json:encode(#{<<"query">> => Q})),
+        Tag   = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
         case fetch_from_agent(Body, Url) of
             {ok, Items} ->
-                Parent ! {disco_result, self(), Tag, Items};
+                Parent ! {disco_result, self(), Tag, Q, Items, Trust};
             {error, R} ->
                 logger:warning("[emquest] pop agent fail ~s: ~p", [Tag, R]),
-                Parent ! {disco_result, self(), Tag, []}
+                Parent ! {disco_result, self(), Tag, Q, [], Trust}
         end
     end)
     || Q <- SubQueries, {PeerMap, _Score} <- Peers].
@@ -419,36 +455,94 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
 %%====================================================================
 
 %% @private
-%% @doc Score a raw result item by how many sub-query terms appear in its text.
+%% @doc Compute cosine similarity between the query vector and an item's text.
 %%
-%% Checks all text fields (title, label, resume, value, description, url)
-%% against each lower-cased sub-query. A match anywhere yields +3; missing
-%% yields 0. The total is summed across all sub-queries so that items
-%% relevant to more sub-terms rank higher.
+%% Extracts all text fields from the raw item, vectorises them with
+%% `em_filter_vec:from_capabilities/1' (same hash-projection as the routing
+%% layer), then returns the dot product of the two unit vectors — which equals
+%% cosine similarity since both vectors are L2-normalised.
 %%
-%% This is intentionally simple — exact substring match, no stemming.
-%% It reliably boosts results that contain the literal search term (e.g.
-%% "turingdb") over unrelated items from feeds that ignore the query.
+%% Returns a float in [-1.0, 1.0]; higher means more semantically similar.
+%% Returns 0.0 when the item has no extractable text.
 %% @end
--spec text_score([binary()], map()) -> non_neg_integer().
-text_score([], _Item) -> 0;
-text_score(SubQueries, RawItem) ->
+-spec item_vec_score(binary(), map()) -> float().
+item_vec_score(QueryVec, RawItem) ->
     Props = maps:get(<<"properties">>, RawItem, RawItem),
-    AllText = lists:foldl(fun(Key, Acc) ->
-        case maps:get(Key, Props, <<>>) of
-            B when is_binary(B) -> <<Acc/binary, " ", B/binary>>;
-            _ -> Acc
-        end
-    end, <<>>, [<<"title">>, <<"label">>, <<"resume">>,
-                <<"value">>, <<"description">>, <<"url">>]),
-    Lower = list_to_binary(string:lowercase(binary_to_list(AllText))),
-    lists:sum([
-        case binary:match(Lower,
-                 list_to_binary(string:lowercase(binary_to_list(Q)))) of
-            nomatch -> 0;
-            _       -> 3
-        end
-    || Q <- SubQueries, byte_size(Q) > 0]).
+    Words = [V || Key <- [<<"title">>, <<"label">>, <<"resume">>,
+                           <<"value">>, <<"description">>],
+                  V   <- [maps:get(Key, Props, <<>>)],
+                  is_binary(V), byte_size(V) > 0],
+    case Words of
+        [] -> 0.0;
+        _  ->
+            ItemVec = em_filter_vec:from_capabilities(Words),
+            dot_product(QueryVec, ItemVec)
+    end.
+
+%% @private
+%% @doc Dot product of two f32 little-endian binary vectors.
+%% @end
+-spec dot_product(binary(), binary()) -> float().
+dot_product(A, B) ->
+    FA = [F || <<F:32/float-little>> <= A],
+    FB = [F || <<F:32/float-little>> <= B],
+    lists:foldl(fun({X, Y}, Acc) -> Acc + X * Y end, 0.0, lists:zip(FA, FB)).
+
+%%====================================================================
+%% Preview fetch
+%%====================================================================
+
+%% @doc Fetch a URL and extract a short description for drift cards.
+%%
+%% Tries og:description, then meta description, then the first <p>.
+%% Returns at most 280 characters. Times out in 5 s.
+%% @end
+-spec fetch_preview(binary()) -> {ok, binary()} | {error, term()}.
+fetch_preview(<<>>) -> {error, empty_url};
+fetch_preview(Url) ->
+    UrlStr = binary_to_list(Url),
+    case httpc:request(get, {UrlStr, [{"User-Agent", "Mozilla/5.0"}]},
+                       [{timeout, 5000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _Headers, Body}} ->
+            {ok, extract_description(Body)};
+        {ok, {{_, Code, _}, _, _}} ->
+            {error, {http, Code}};
+        {error, R} ->
+            {error, R}
+    end.
+
+%% @private
+-spec extract_description(binary()) -> binary().
+extract_description(Html) ->
+    Patterns = [
+        <<"og:description\"[^>]*content=\"([^\"]{10,})">>,
+        <<"og:description'[^>]*content='([^']{10,})">>,
+        <<"content=\"([^\"]{10,})\"[^>]*name=\"description">>,
+        <<"content='([^']{10,})'[^>]*name='description">>,
+        <<"<p[^>]*>([^<]{30,})</p>">>
+    ],
+    extract_first(Html, Patterns).
+
+extract_first(_Html, []) -> <<>>;
+extract_first(Html, [Pat | Rest]) ->
+    case re:run(Html, Pat, [{capture, [1], binary}, caseless, unicode]) of
+        {match, [M]} ->
+            Trimmed = trim_ws(M),
+            case byte_size(Trimmed) > 10 of
+                true  -> truncate(Trimmed, 280);
+                false -> extract_first(Html, Rest)
+            end;
+        _ -> extract_first(Html, Rest)
+    end.
+
+trim_ws(B) ->
+    Re = <<"^\\s+|\\s+$">>,
+    re:replace(B, Re, <<>>, [global, {return, binary}]).
+
+truncate(B, Max) when byte_size(B) =< Max -> B;
+truncate(B, Max) ->
+    <<Prefix:Max/binary, _/binary>> = B,
+    <<Prefix/binary, "…">>.
 
 %%====================================================================
 %% SSE helpers
