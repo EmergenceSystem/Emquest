@@ -209,9 +209,8 @@ is_image_ext(Bin) ->
               [<<".jpg">>, <<".jpeg">>, <<".png">>, <<".webp">>, <<".gif">>,
                <<".tif">>, <<".tiff">>, <<".jp2">>, <<".bmp">>]).
 
-velora_base()   -> application:get_env(emquest, velora_url, "http://localhost:8081").
-velora_filter() -> application:get_env(emquest, velora_filter_url, "http://localhost:9211/agent/query").
-tiles_base()    -> list_to_binary(application:get_env(emquest, velora_tiles_base, "https://velora.roques.me")).
+velora_base() -> application:get_env(emquest, velora_url, "http://localhost:8081").
+tiles_base()  -> list_to_binary(application:get_env(emquest, velora_tiles_base, "https://velora.roques.me")).
 
 %% File path: upload to velora, render, build an absolute-tiles raster card.
 velora_upload_render(Filename, Bytes) ->
@@ -246,14 +245,22 @@ velora_render(Uri) ->
         {error, R} -> {error, R}
     end.
 
-%% URL path: route to the velora tiles filter (mesh agent); its card carries
-%% relative tiles, rewritten absolute here.
+%% URL path: render directly on velora with a long timeout. (The velora tiles
+%% filter would also work, but em_filter_http hard-caps a filter query at 30s,
+%% too short for a large source; going direct lets big images finish.)
 velora_filter_render(Url) ->
-    Body = iolist_to_binary(json:encode(#{<<"query">> => Url})),
-    case fetch_from_agent(Body, velora_filter()) of
-        {ok, [Card | _]} -> {ok, absolute_tiles(Card)};
-        {ok, []}         -> {error, no_result};
-        {error, R}       -> {error, R}
+    Body = iolist_to_binary(json:encode(#{<<"query">> => Url, <<"intent">> => <<"tiles">>})),
+    case httpc:request(post, {velora_base() ++ "/agent/query",
+                              [{"content-type", "application/json"}],
+                              "application/json", Body},
+                       [{timeout, 120000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, Resp}} ->
+            case (try json:decode(Resp) catch _:_ -> #{} end) of
+                #{<<"results">> := [Card | _]} -> {ok, absolute_tiles(Card)};
+                _ -> {error, no_result}
+            end;
+        {ok, {{_, C, _}, _, _}} -> {error, {query_http, C}};
+        {error, R} -> {error, R}
     end.
 
 absolute_tiles(#{<<"tiles">> := T} = Card) when is_binary(T) ->
