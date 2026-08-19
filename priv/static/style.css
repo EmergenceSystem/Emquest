@@ -544,3 +544,28 @@ a.item-title:hover,
 
 .media-msg { padding: 16px; color: #9aa2ad; font-size: 14px; }
 .media-msg.err { color: #ff7a7a; }
+
+/* ── user prompt echo (chat-like) ───────────────────────────────── */
+.user-prompt {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 14px; padding: 10px 14px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-left: 2px solid var(--green-dim); border-radius: 10px;
+    color: var(--text-secondary); font-family: var(--font-mono); font-size: 13px;
+    animation: promptIn 0.25s var(--ease) both;
+}
+@keyframes promptIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.user-prompt .up-icon { color: var(--green); flex: none; }
+.user-prompt .up-text { overflow-wrap: anywhere; }
+.user-prompt--image .up-text { color: var(--text-primary); }
+
+/* raster result card head */
+.item-raster { padding: 0; overflow: hidden; }
+.raster-head {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); border-radius: 0;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted); background: transparent;
+}
+.raster-badge { color: var(--green); letter-spacing: 0.08em; font-weight: 500; }
+.raster-id { color: var(--text-secondary); }
+.raster-stats { color: var(--blue-dim); margin-left: auto; }

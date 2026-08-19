@@ -144,8 +144,9 @@ async function submitQuery() {
     empty.hidden   = true;
     results.hidden = false;
 
-    /* Pre-render layout: progress log above results */
-    results.innerHTML = `
+    /* Pre-render layout: user prompt echo + progress log above results */
+    results.innerHTML =
+        userPromptHtml(query) + `
         <div class="progress-log" id="progress-log"></div>
         <ul class="items-list" id="results-list"></ul>
     `;
@@ -476,10 +477,11 @@ async function runMedia(fetchPromise, label) {
     if (empty) empty.hidden = true;
     if (results) {
         results.hidden = false;
-        results.innerHTML =
+        mediaPromptHtml = userPromptHtml(label || 'image', { image: true });
+        results.innerHTML = mediaPromptHtml +
             '<div class="progress-log"><div class="progress-line">' +
-            '<span class="progress-arrow">›</span>velora is processing ' +
-            escHtml(label || 'the image') + '…</div></div>';
+            '<span class="progress-arrow">›</span>velora is rendering the image…' +
+            '</div></div>';
     }
     try {
         const resp = await fetchPromise;
@@ -491,9 +493,31 @@ async function runMedia(fetchPromise, label) {
     }
 }
 
+/* The user's message, echoed at the top of the results like a chat prompt.
+ * Images show as a compact "🖼 name" chip (full source in the title). */
+let mediaPromptHtml = '';
+
+function userPromptHtml(text, opts) {
+    opts = opts || {};
+    const full  = String(text);
+    const label = opts.image ? labelShort(full) : full;
+    const icon  = opts.image ? '🖼' : '›';
+    const cls   = 'user-prompt' + (opts.image ? ' user-prompt--image' : '');
+    return '<div class="' + cls + '" title="' + escAttr(full) + '">' +
+             '<span class="up-icon">' + icon + '</span>' +
+             '<span class="up-text">' + escHtml(label) + '</span>' +
+           '</div>';
+}
+
+function labelShort(s) {
+    let t = String(s).split('#')[0].split('?')[0];
+    if (/^https?:\/\//i.test(t)) { const p = t.split('/').filter(Boolean); t = p[p.length - 1] || t; }
+    return t.length > 64 ? t.slice(0, 61) + '…' : t;
+}
+
 function showMediaMsg(msg, err) {
     const results = document.getElementById('results');
-    if (results) results.innerHTML =
+    if (results) results.innerHTML = mediaPromptHtml +
         '<div class="media-msg' + (err ? ' err' : '') + '">' + escHtml(msg) + '</div>';
 }
 
@@ -501,15 +525,16 @@ function showRaster(card) {
     const results = document.getElementById('results');
     if (!results || typeof L === 'undefined') { showMediaMsg('map unavailable', true); return; }
     const nz = card.maxNativeZoom || 19;
-    const stats = card.stats
-        ? ' · NDVI mean ' + (+card.stats.mean).toFixed(3)
-        : '';
-    results.innerHTML =
-        '<div class="raster-card">' +
-          '<div class="raster-head">🛰️ velora · <span class="raster-id">' +
-          escHtml(card.id || '') + '</span>' + stats + '</div>' +
+    const stats = card.stats ? ' · NDVI mean ' + (+card.stats.mean).toFixed(3) : '';
+    results.innerHTML = mediaPromptHtml +
+        '<ul class="items-list"><li class="item-card item-raster">' +
+          '<div class="raster-head">' +
+            '<span class="raster-badge">🛰 VELORA</span>' +
+            '<span class="raster-id">#' + escHtml(card.id || '') + '</span>' +
+            (stats ? '<span class="raster-stats">' + escHtml(stats.replace(' · ', '')) + '</span>' : '') +
+          '</div>' +
           '<div id="raster-map" class="raster-map"></div>' +
-        '</div>';
+        '</li></ul>';
     const map = L.map('raster-map', { attributionControl: false, minZoom: 0, maxZoom: nz + 8 });
     const b = card.bounds ? L.latLngBounds(card.bounds) : null;
     L.tileLayer(card.tiles, {
