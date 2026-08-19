@@ -219,7 +219,7 @@ velora_upload_render(Filename, Bytes) ->
     UpCT = "multipart/form-data; boundary=" ++ Boundary,
     case httpc:request(post, {velora_base() ++ "/uploads", [], UpCT, MBody},
                        [{timeout, 30000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, UpResp}} ->
+        {ok, {{_, S, _}, _, UpResp}} when S =:= 200; S =:= 201 ->
             case (try json:decode(UpResp) catch _:_ -> #{} end) of
                 #{<<"uri">> := Uri} -> velora_render(Uri);
                 _ -> {error, bad_upload_response}
