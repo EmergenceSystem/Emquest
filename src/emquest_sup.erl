@@ -59,6 +59,7 @@ init([]) ->
                 {'_', [
                     {"/",               emquest_handler, index},
                     {"/query",          emquest_handler, query},
+                    {"/media",          emquest_handler, media},
                     {"/drift",          emquest_handler, drift},
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},

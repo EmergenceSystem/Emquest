@@ -121,7 +121,154 @@ init(Req0, query) ->
             {ok, cowboy_req:reply(405,
                 #{<<"content-type">> => <<"application/json">>},
                 <<"{\"error\":\"Use POST\"}">>, Req0), query}
+    end;
+
+%% Media: an uploaded image (multipart) or an image URL ({"url":...}) is routed
+%% to velora and answered with a raster card (absolute tile URLs). Non-images
+%% get 415 "not supported for now". This is the generic upload hook — for now
+%% only images, handled by velora.
+init(Req0, media) ->
+    case cowboy_req:method(Req0) of
+        <<"POST">> ->
+            CT = cowboy_req:header(<<"content-type">>, Req0, <<>>),
+            case binary:match(CT, <<"multipart/form-data">>) of
+                nomatch -> media_url(Req0);
+                _       -> media_upload(Req0)
+            end;
+        _ ->
+            {ok, cowboy_req:reply(405,
+                #{<<"content-type">> => <<"application/json">>},
+                <<"{\"error\":\"Use POST\"}">>, Req0), media}
     end.
+
+%%====================================================================
+%% Media (image -> velora)
+%%====================================================================
+
+media_upload(Req0) ->
+    case read_upload(Req0) of
+        {ok, Filename, Bytes, Req1} ->
+            case is_image_ext(Filename) of
+                true  -> media_result(Req1, velora_upload_render(Filename, Bytes));
+                false -> media_unsupported(Req1)
+            end;
+        {error, Reason, Req1} ->
+            media_err(Req1, 400, Reason)
+    end.
+
+media_url(Req0) ->
+    {ok, Body, Req1} = cowboy_req:read_body(Req0),
+    case (try json:decode(Body) catch _:_ -> #{} end) of
+        #{<<"url">> := Url} when is_binary(Url) ->
+            case is_image_ext(Url) of
+                true  -> media_result(Req1, velora_filter_render(Url));
+                false -> media_unsupported(Req1)
+            end;
+        _ -> media_err(Req1, 400, missing_url)
+    end.
+
+media_result(Req, {ok, Card})     -> {ok, cowboy_req:reply(200, media_ct(), json:encode(Card), Req), media};
+media_result(Req, {error, Reason}) -> media_err(Req, 502, Reason).
+
+media_unsupported(Req) ->
+    {ok, cowboy_req:reply(415, media_ct(),
+        json:encode(#{<<"error">> => <<"only images are supported for now">>}), Req), media}.
+
+media_err(Req, Code, Reason) ->
+    {ok, cowboy_req:reply(Code, media_ct(),
+        json:encode(#{<<"error">> => media_ebin(Reason)}), Req), media}.
+
+media_ct() -> #{<<"content-type">> => <<"application/json">>}.
+media_ebin(B) when is_binary(B) -> B;
+media_ebin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+
+%% Read the first multipart file part; returns {ok, Filename, Bytes, Req}.
+read_upload(Req0) ->
+    case cowboy_req:read_part(Req0) of
+        {ok, Headers, Req1} ->
+            case cow_multipart:form_data(Headers) of
+                {file, _Field, Filename, _CType} ->
+                    {Bytes, Req2} = read_part_all(Req1, <<>>),
+                    {ok, Filename, Bytes, Req2};
+                _ ->
+                    {_, Req2} = read_part_all(Req1, <<>>),
+                    read_upload(Req2)
+            end;
+        {done, Req1} -> {error, no_file, Req1}
+    end.
+
+read_part_all(Req0, Acc) ->
+    case cowboy_req:read_part_body(Req0) of
+        {ok, Data, Req1}   -> {<<Acc/binary, Data/binary>>, Req1};
+        {more, Data, Req1} -> read_part_all(Req1, <<Acc/binary, Data/binary>>)
+    end.
+
+is_image_ext(Bin) ->
+    L = string:lowercase(iolist_to_binary(Bin)),
+    lists:any(fun(Ext) -> binary:match(L, Ext) =/= nomatch end,
+              [<<".jpg">>, <<".jpeg">>, <<".png">>, <<".webp">>, <<".gif">>,
+               <<".tif">>, <<".tiff">>, <<".jp2">>, <<".bmp">>]).
+
+velora_base()   -> application:get_env(emquest, velora_url, "http://localhost:8081").
+velora_filter() -> application:get_env(emquest, velora_filter_url, "http://localhost:9211/agent/query").
+tiles_base()    -> list_to_binary(application:get_env(emquest, velora_tiles_base, "https://velora.roques.me")).
+
+%% File path: upload to velora, render, build an absolute-tiles raster card.
+velora_upload_render(Filename, Bytes) ->
+    {Boundary, MBody} = build_multipart(Filename, Bytes),
+    UpCT = "multipart/form-data; boundary=" ++ Boundary,
+    case httpc:request(post, {velora_base() ++ "/uploads", [], UpCT, MBody},
+                       [{timeout, 30000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, UpResp}} ->
+            case (try json:decode(UpResp) catch _:_ -> #{} end) of
+                #{<<"uri">> := Uri} -> velora_render(Uri);
+                _ -> {error, bad_upload_response}
+            end;
+        {ok, {{_, C, _}, _, _}} -> {error, {upload_http, C}};
+        {error, R} -> {error, R}
+    end.
+
+velora_render(Uri) ->
+    RBody = iolist_to_binary(json:encode(#{<<"uri">> => Uri})),
+    case httpc:request(post, {velora_base() ++ "/render",
+                              [{"content-type", "application/json"}],
+                              "application/json", RBody},
+                       [{timeout, 60000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, Resp}} ->
+            M   = json:decode(Resp),
+            Id  = maps:get(<<"id">>, M),
+            NZ  = maps:get(<<"maxNativeZoom">>, M, 19),
+            {ok, #{<<"type">> => <<"raster">>, <<"id">> => Id,
+                   <<"bounds">> => maps:get(<<"bounds">>, M, null),
+                   <<"maxNativeZoom">> => NZ,
+                   <<"tiles">> => <<(tiles_base())/binary, "/tiles/", Id/binary, "/{z}/{x}/{y}">>}};
+        {ok, {{_, C, _}, _, _}} -> {error, {render_http, C}};
+        {error, R} -> {error, R}
+    end.
+
+%% URL path: route to the velora tiles filter (mesh agent); its card carries
+%% relative tiles, rewritten absolute here.
+velora_filter_render(Url) ->
+    Body = iolist_to_binary(json:encode(#{<<"query">> => Url})),
+    case fetch_from_agent(Body, velora_filter()) of
+        {ok, [Card | _]} -> {ok, absolute_tiles(Card)};
+        {ok, []}         -> {error, no_result};
+        {error, R}       -> {error, R}
+    end.
+
+absolute_tiles(#{<<"tiles">> := T} = Card) when is_binary(T) ->
+    Card#{<<"tiles">> => <<(tiles_base())/binary, T/binary>>};
+absolute_tiles(Card) -> Card.
+
+build_multipart(Filename, Bytes) ->
+    B  = "----emq" ++ integer_to_list(erlang:unique_integer([positive])),
+    FN = binary_to_list(iolist_to_binary(Filename)),
+    Body = iolist_to_binary([
+        "--", B, "\r\n",
+        "Content-Disposition: form-data; name=\"file\"; filename=\"", FN, "\"\r\n",
+        "Content-Type: application/octet-stream\r\n\r\n",
+        Bytes, "\r\n", "--", B, "--\r\n"]),
+    {B, Body}.
 
 %%====================================================================
 %% Pipeline

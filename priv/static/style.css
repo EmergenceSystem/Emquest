@@ -517,3 +517,30 @@ a.item-title:hover,
     }
     .main--panel-open { max-width: var(--max-w); margin-right: auto; padding-bottom: calc(38vh + 3rem); }
 }
+
+/* ── velora image media ─────────────────────────────────────────── */
+.add-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; margin-right: 4px;
+    background: transparent; color: rgba(0, 220, 100, 0.75);
+    border: 1px solid rgba(0, 220, 100, 0.25); border-radius: 8px;
+    cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.add-btn:hover { background: rgba(0, 220, 100, 0.10); color: rgba(0, 220, 100, 1); border-color: rgba(0, 220, 100, 0.5); }
+.add-btn svg { width: 18px; height: 18px; }
+
+.raster-card {
+    border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
+    overflow: hidden; background: rgba(255, 255, 255, 0.02);
+}
+.raster-head {
+    padding: 10px 14px; font-size: 13px; color: #9aa2ad;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-variant-numeric: tabular-nums;
+}
+.raster-head .raster-id { color: rgba(0, 220, 100, 0.85); }
+.raster-map { width: 100%; height: 460px; background: #0b0e0c; }
+.raster-map img { image-rendering: pixelated; }
+
+.media-msg { padding: 16px; color: #9aa2ad; font-size: 14px; }
+.media-msg.err { color: #ff7a7a; }

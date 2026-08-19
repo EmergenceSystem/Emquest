@@ -121,6 +121,17 @@ async function submitQuery() {
     const query = queryInput?.value.trim();
     if (!query) return;
 
+    /* An image URL in the message is handled by velora, not the search pipeline. */
+    const imgUrl = extractImageUrl(query);
+    if (imgUrl) {
+        runMedia(fetch('/media', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: imgUrl }),
+        }), imgUrl);
+        return;
+    }
+
     const btn     = document.getElementById('send-btn');
     const results = document.getElementById('results');
     const empty   = document.getElementById('empty-state');
@@ -432,4 +443,77 @@ function safeUrl(s) {
 }
 function hostnameOf(url) {
     try { return new URL(url).hostname; } catch (_) { return url; }
+}
+
+/* ── Image media (upload / URL) → velora ─────────────────────────────── */
+const IMG_EXT = /\.(jpe?g|png|webp|gif|tiff?|jp2|bmp)(\?|#|$)/i;
+const URL_RE  = /https?:\/\/[^\s]+/i;
+
+function extractImageUrl(text) {
+    const m = text.match(URL_RE);
+    return (m && IMG_EXT.test(m[0])) ? m[0] : null;
+}
+
+document.getElementById('add-btn')?.addEventListener('click', () =>
+    document.getElementById('media-file')?.click());
+
+document.getElementById('media-file')?.addEventListener('change', function () {
+    const f = this.files && this.files[0];
+    this.value = '';
+    if (!f) return;
+    if (!f.type.startsWith('image/') && !IMG_EXT.test(f.name)) {
+        showMediaMsg('Only images are supported for now.', true);
+        return;
+    }
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    runMedia(fetch('/media', { method: 'POST', body: fd }), f.name);
+});
+
+async function runMedia(fetchPromise, label) {
+    const results = document.getElementById('results');
+    const empty   = document.getElementById('empty-state');
+    if (empty) empty.hidden = true;
+    if (results) {
+        results.hidden = false;
+        results.innerHTML =
+            '<div class="progress-log"><div class="progress-line">' +
+            '<span class="progress-arrow">›</span>velora is processing ' +
+            escHtml(label || 'the image') + '…</div></div>';
+    }
+    try {
+        const resp = await fetchPromise;
+        const data = await resp.json();
+        if (!resp.ok || data.error) { showMediaMsg(data.error || ('HTTP ' + resp.status), true); return; }
+        showRaster(data);
+    } catch (e) {
+        showMediaMsg('velora unreachable: ' + String(e), true);
+    }
+}
+
+function showMediaMsg(msg, err) {
+    const results = document.getElementById('results');
+    if (results) results.innerHTML =
+        '<div class="media-msg' + (err ? ' err' : '') + '">' + escHtml(msg) + '</div>';
+}
+
+function showRaster(card) {
+    const results = document.getElementById('results');
+    if (!results || typeof L === 'undefined') { showMediaMsg('map unavailable', true); return; }
+    const nz = card.maxNativeZoom || 19;
+    const stats = card.stats
+        ? ' · NDVI mean ' + (+card.stats.mean).toFixed(3)
+        : '';
+    results.innerHTML =
+        '<div class="raster-card">' +
+          '<div class="raster-head">🛰️ velora · <span class="raster-id">' +
+          escHtml(card.id || '') + '</span>' + stats + '</div>' +
+          '<div id="raster-map" class="raster-map"></div>' +
+        '</div>';
+    const map = L.map('raster-map', { attributionControl: false, minZoom: 0, maxZoom: nz + 8 });
+    const b = card.bounds ? L.latLngBounds(card.bounds) : null;
+    L.tileLayer(card.tiles, {
+        bounds: b, noWrap: true, maxNativeZoom: nz, maxZoom: nz + 8, tileSize: 256
+    }).addTo(map);
+    if (b) map.fitBounds(b); else map.setView([0, 0], 2);
 }
