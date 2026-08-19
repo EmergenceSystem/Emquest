@@ -161,7 +161,7 @@ media_url(Req0) ->
     case (try json:decode(Body) catch _:_ -> #{} end) of
         #{<<"url">> := Url} when is_binary(Url) ->
             case is_image_ext(Url) of
-                true  -> media_result(Req1, velora_filter_render(Url));
+                true  -> media_result(Req1, fetch_url_render(Url));
                 false -> media_unsupported(Req1)
             end;
         _ -> media_err(Req1, 400, missing_url)
@@ -245,27 +245,30 @@ velora_render(Uri) ->
         {error, R} -> {error, R}
     end.
 
-%% URL path: render directly on velora with a long timeout. (The velora tiles
-%% filter would also work, but em_filter_http hard-caps a filter query at 30s,
-%% too short for a large source; going direct lets big images finish.)
-velora_filter_render(Url) ->
-    Body = iolist_to_binary(json:encode(#{<<"query">> => Url, <<"intent">> => <<"tiles">>})),
-    case httpc:request(post, {velora_base() ++ "/agent/query",
-                              [{"content-type", "application/json"}],
-                              "application/json", Body},
-                       [{timeout, 120000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, Resp}} ->
-            case (try json:decode(Resp) catch _:_ -> #{} end) of
-                #{<<"results">> := [Card | _]} -> {ok, absolute_tiles(Card)};
-                _ -> {error, no_result}
-            end;
-        {ok, {{_, C, _}, _, _}} -> {error, {query_http, C}};
-        {error, R} -> {error, R}
+%% URL path: Emquest fetches the image itself (a normal GET works with hosts that
+%% reject GDAL's /vsicurl Range requests, e.g. Wikimedia), then uploads the bytes
+%% to velora — the same path as a file upload. Avoids /vsicurl entirely.
+fetch_url_render(Url) ->
+    case fetch_image(Url) of
+        {ok, Bytes} -> velora_upload_render(url_filename(Url), Bytes);
+        {error, R}  -> {error, R}
     end.
 
-absolute_tiles(#{<<"tiles">> := T} = Card) when is_binary(T) ->
-    Card#{<<"tiles">> => <<(tiles_base())/binary, T/binary>>};
-absolute_tiles(Card) -> Card.
+fetch_image(Url) ->
+    _ = application:ensure_all_started(ssl),
+    Req = {binary_to_list(Url), [{"User-Agent", "velora/1.0"}, {"accept", "image/*"}]},
+    case httpc:request(get, Req, [{timeout, 30000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
+        {ok, {{_, C, _}, _, _}}       -> {error, {fetch_http, C}};
+        {error, R}                    -> {error, R}
+    end.
+
+url_filename(Url) ->
+    Path = case binary:split(Url, <<"?">>) of [P | _] -> P; _ -> Url end,
+    case binary:split(Path, <<"/">>, [global, trim_all]) of
+        [] -> <<"image">>;
+        Ps -> lists:last(Ps)
+    end.
 
 build_multipart(Filename, Bytes) ->
     B  = "----emq" ++ integer_to_list(erlang:unique_integer([positive])),
