@@ -233,17 +233,39 @@ velora_render(Uri) ->
                               [{"content-type", "application/json"}],
                               "application/json", RBody},
                        [{timeout, 60000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, Resp}} ->
-            M   = json:decode(Resp),
-            Id  = maps:get(<<"id">>, M),
-            NZ  = maps:get(<<"maxNativeZoom">>, M, 19),
-            {ok, #{<<"type">> => <<"raster">>, <<"id">> => Id,
-                   <<"bounds">> => maps:get(<<"bounds">>, M, null),
-                   <<"maxNativeZoom">> => NZ,
-                   <<"tiles">> => <<(tiles_base())/binary, "/tiles/", Id/binary, "/{z}/{x}/{y}">>}};
+        {ok, {{_, S, _}, _, Resp}} when S =:= 200; S =:= 202 ->
+            %% /render is async: it answers {status:processing, poll} and the warp
+            %% runs in the background — poll GET /prepare/:id until it is done.
+            case json:decode(Resp) of
+                #{<<"status">> := <<"processing">>, <<"poll">> := Poll} ->
+                    poll_prepare(binary_to_list(Poll), 60);
+                #{<<"id">> := _} = M -> {ok, render_card(M)}
+            end;
         {ok, {{_, C, _}, _, _}} -> {error, {render_http, C}};
         {error, R} -> {error, R}
     end.
+
+poll_prepare(_Poll, 0) -> {error, prepare_timeout};
+poll_prepare(Poll, N) ->
+    timer:sleep(1500),
+    case httpc:request(get, {velora_base() ++ Poll, []},
+                       [{timeout, 15000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, B}} ->
+            case json:decode(B) of
+                #{<<"status">> := <<"done">>} = D    -> {ok, render_card(D)};
+                #{<<"status">> := <<"error">>} = E   -> {error, {render, maps:get(<<"error">>, E, <<"error">>)}};
+                _ -> poll_prepare(Poll, N - 1)
+            end;
+        _ -> poll_prepare(Poll, N - 1)
+    end.
+
+render_card(M) ->
+    Id = maps:get(<<"id">>, M),
+    NZ = maps:get(<<"maxNativeZoom">>, M, 19),
+    #{<<"type">> => <<"raster">>, <<"id">> => Id,
+      <<"bounds">> => maps:get(<<"bounds">>, M, null),
+      <<"maxNativeZoom">> => NZ,
+      <<"tiles">> => <<(tiles_base())/binary, "/tiles/", Id/binary, "/{z}/{x}/{y}">>}.
 
 %% URL path: Emquest fetches the image itself (a normal GET works with hosts that
 %% reject GDAL's /vsicurl Range requests, e.g. Wikimedia), then uploads the bytes
