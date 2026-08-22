@@ -540,8 +540,8 @@ a.item-title:hover,
 }
 .raster-head .raster-id { color: rgba(0, 220, 100, 0.85); }
 .raster-map { width: 100%; height: 460px; background: #0b0e0c; }
-/* +0.5px so neighbouring tiles overlap a hair and no seam shows between them */
-.raster-map .leaflet-tile { image-rendering: pixelated; width: 256.5px !important; height: 256.5px !important; }
+/* +1px so neighbouring tiles overlap and no seam shows between them */
+.raster-map .leaflet-tile { image-rendering: pixelated; width: 257px !important; height: 257px !important; }
 
 .media-msg { padding: 16px; color: #9aa2ad; font-size: 14px; }
 .media-msg.err { color: #ff7a7a; }
