@@ -139,7 +139,14 @@ init(Req0, media) ->
             {ok, cowboy_req:reply(405,
                 #{<<"content-type">> => <<"application/json">>},
                 <<"{\"error\":\"Use POST\"}">>, Req0), media}
-    end.
+    end;
+%% GET /media/prepare/:id — proxy velora's async prepare poll so the browser can
+%% poll here (same origin) instead of us blocking the /media request open for the
+%% whole warp. Returns {status:processing} | a done raster card | {status:error}.
+init(Req0, media_prepare) ->
+    Id = cowboy_req:binding(id, Req0),
+    {Code, Body} = velora_prepare_poll(Id),
+    {ok, cowboy_req:reply(Code, media_ct(), json:encode(Body), Req0), media_prepare}.
 
 %%====================================================================
 %% Media (image -> velora)
@@ -167,7 +174,16 @@ media_url(Req0) ->
         _ -> media_err(Req1, 400, missing_url)
     end.
 
-media_result(Req, {ok, Card})     -> {ok, cowboy_req:reply(200, media_ct(), json:encode(Card), Req), media};
+%% velora's warp is asynchronous: answer the browser right away with a poll URL
+%% (served here at /media/prepare/:id) instead of blocking this request for the
+%% whole render. A legacy synchronous velora still yields a ready card.
+media_result(Req, {ok, {processing, PrepId}}) ->
+    Body = #{<<"status">> => <<"processing">>,
+             <<"prepare">> => PrepId,
+             <<"poll">> => <<"/media/prepare/", PrepId/binary>>},
+    {ok, cowboy_req:reply(202, media_ct(), json:encode(Body), Req), media};
+media_result(Req, {ok, {ready, Card}}) ->
+    {ok, cowboy_req:reply(200, media_ct(), json:encode(Card), Req), media};
 media_result(Req, {error, Reason}) -> media_err(Req, 502, Reason).
 
 media_unsupported(Req) ->
@@ -227,36 +243,44 @@ velora_upload_render(Filename, Bytes) ->
         {error, R} -> {error, R}
     end.
 
+%% Kick off velora's async warp. /render answers 202 {status:processing, prepare}
+%% instantly (the warp is backgrounded), so this returns the prepare id for the
+%% browser to poll — it does NOT block on the render. A legacy synchronous velora
+%% (a ready {id,...}) still yields a ready card.
 velora_render(Uri) ->
     RBody = iolist_to_binary(json:encode(#{<<"uri">> => Uri})),
     case httpc:request(post, {velora_base() ++ "/render",
                               [{"content-type", "application/json"}],
                               "application/json", RBody},
-                       [{timeout, 60000}], [{body_format, binary}]) of
+                       [{timeout, 15000}], [{body_format, binary}]) of
         {ok, {{_, S, _}, _, Resp}} when S =:= 200; S =:= 202 ->
-            %% /render is async: it answers {status:processing, poll} and the warp
-            %% runs in the background — poll GET /prepare/:id until it is done.
             case json:decode(Resp) of
-                #{<<"status">> := <<"processing">>, <<"poll">> := Poll} ->
-                    poll_prepare(binary_to_list(Poll), 60);
-                #{<<"id">> := _} = M -> {ok, render_card(M)}
+                #{<<"status">> := <<"processing">>, <<"prepare">> := P} ->
+                    {ok, {processing, P}};
+                #{<<"id">> := _} = M -> {ok, {ready, render_card(M)}}
             end;
         {ok, {{_, C, _}, _, _}} -> {error, {render_http, C}};
         {error, R} -> {error, R}
     end.
 
-poll_prepare(_Poll, 0) -> {error, prepare_timeout};
-poll_prepare(Poll, N) ->
-    timer:sleep(1500),
-    case httpc:request(get, {velora_base() ++ Poll, []},
-                       [{timeout, 15000}], [{body_format, binary}]) of
+%% One poll of velora's async prepare, proxied for /media/prepare/:id. Maps
+%% velora's /prepare/:id answer to {HttpCode, JsonBody} for the browser.
+velora_prepare_poll(Id) ->
+    Url = velora_base() ++ "/prepare/" ++ binary_to_list(Id),
+    case httpc:request(get, {Url, []}, [{timeout, 15000}], [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, B}} ->
-            case json:decode(B) of
-                #{<<"status">> := <<"done">>} = D    -> {ok, render_card(D)};
-                #{<<"status">> := <<"error">>} = E   -> {error, {render, maps:get(<<"error">>, E, <<"error">>)}};
-                _ -> poll_prepare(Poll, N - 1)
+            case (try json:decode(B) catch _:_ -> #{} end) of
+                #{<<"status">> := <<"done">>} = D ->
+                    {200, (render_card(D))#{<<"status">> => <<"done">>}};
+                #{<<"status">> := <<"error">>} = E ->
+                    {200, #{<<"status">> => <<"error">>,
+                            <<"error">> => media_ebin(maps:get(<<"error">>, E, <<"error">>))}};
+                _ ->
+                    {200, #{<<"status">> => <<"processing">>}}
             end;
-        _ -> poll_prepare(Poll, N - 1)
+        {ok, {{_, 404, _}, _, _}} -> {404, #{<<"status">> => <<"not_found">>}};
+        {ok, {{_, C, _}, _, _}}   -> {502, #{<<"error">> => media_ebin({prepare_http, C})}};
+        {error, R}                -> {502, #{<<"error">> => media_ebin(R)}}
     end.
 
 render_card(M) ->

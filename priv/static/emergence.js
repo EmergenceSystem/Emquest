@@ -487,10 +487,27 @@ async function runMedia(fetchPromise, label) {
         const resp = await fetchPromise;
         const data = await resp.json();
         if (!resp.ok || data.error) { showMediaMsg(data.error || ('HTTP ' + resp.status), true); return; }
-        showRaster(data);
+        // velora's warp is async: /media answers {status:processing, poll} and we
+        // poll it (same origin) until the render is done, then draw the tiles.
+        const card = await pollMediaPrepare(data);
+        showRaster(card);
     } catch (e) {
-        showMediaMsg('velora unreachable: ' + String(e), true);
+        showMediaMsg(String((e && e.message) || e), true);
     }
+}
+
+// Poll /media/prepare/:id until velora's background warp is done (or errors).
+async function pollMediaPrepare(resp) {
+    if (!resp || resp.status !== 'processing') return resp; // already a ready card
+    for (let i = 0; i < 200; i++) {          // ~5 min at 1.5s
+        await new Promise(f => setTimeout(f, 1500));
+        let st;
+        try { st = await (await fetch(resp.poll)).json(); } catch (_) { continue; }
+        if (st.status === 'done')  return st;
+        if (st.status === 'error') throw new Error(st.error || 'render failed');
+        if (st.status === 'not_found') throw new Error('render expired');
+    }
+    throw new Error('render timed out');
 }
 
 /* The user's message, echoed at the top of the results like a chat prompt.

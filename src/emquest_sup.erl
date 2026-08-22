@@ -60,6 +60,7 @@ init([]) ->
                     {"/",               emquest_handler, index},
                     {"/query",          emquest_handler, query},
                     {"/media",          emquest_handler, media},
+                    {"/media/prepare/:id", emquest_handler, media_prepare},
                     {"/drift",          emquest_handler, drift},
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
