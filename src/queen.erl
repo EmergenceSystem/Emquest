@@ -89,7 +89,7 @@
 %% @end
 -spec expand(binary()) -> [binary()].
 expand(Query) when byte_size(Query) < 25 ->
-    [Query];
+    [Query | [K || K <- local_keywords(Query), K =/= Query]];
 expand(Query) ->
     Conf   = read_llm_conf(),
     Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
@@ -104,11 +104,31 @@ expand(Query) ->
     ),
     SubQueries = case call_handler(maps:get(provider, Conf, <<"mistral">>),
                                    Prompt, HandlerConf) of
-        {ok, Text} -> parse_json_list(Text);
-        _          -> []
+        {ok, Text} -> case parse_json_list(Text) of [] -> local_keywords(Query); Lst -> Lst end;
+        _          -> local_keywords(Query)
     end,
     Deduped = lists:usort(SubQueries),
     [Query | lists:delete(Query, Deduped)].
+
+%% @private Local keyword fallback (no LLM): split a phrase into topic
+%% words, dropping short tokens and common FR/EN stopwords.
+-spec local_keywords(binary()) -> [binary()].
+local_keywords(Query) ->
+    Parts = binary:split(Query,
+        [<<" ">>,<<",">>,<<".">>,<<";">>,<<":">>,<<"?">>,<<"!">>,
+         <<"(">>,<<")">>,<<"/">>,<<"-">>],
+        [global, trim_all]),
+    Kw = [string:lowercase(P) || P <- Parts, byte_size(P) >= 3],
+    Kw2 = [K || K <- Kw, not lists:member(K, stopwords())],
+    lists:sublist(lists:usort(Kw2), 6).
+
+-spec stopwords() -> [binary()].
+stopwords() ->
+    [<<"les">>,<<"des">>,<<"une">>,<<"que">>,<<"qui">>,<<"pour">>,
+     <<"avec">>,<<"dans">>,<<"sur">>,<<"est">>,<<"aux">>,<<"ces">>,
+     <<"son">>,<<"ses">>,<<"nos">>,<<"vos">>,<<"leur">>,<<"the">>,
+     <<"and">>,<<"for">>,<<"with">>,<<"from">>,<<"this">>,<<"that">>,
+     <<"are">>,<<"was">>,<<"you">>,<<"your">>].
 
 %%====================================================================
 %% Synthesis
