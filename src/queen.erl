@@ -89,7 +89,7 @@
 %% @end
 -spec expand(binary()) -> [binary()].
 expand(Query) when byte_size(Query) < 25 ->
-    [Query | [K || K <- local_keywords(Query), K =/= Query]];
+    [Query | [K || K <- fallback_topics(Query), K =/= Query]];
 expand(Query) ->
     Conf   = read_llm_conf(),
     Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
@@ -104,8 +104,8 @@ expand(Query) ->
     ),
     SubQueries = case call_handler(maps:get(provider, Conf, <<"mistral">>),
                                    Prompt, HandlerConf) of
-        {ok, Text} -> case parse_json_list(Text) of [] -> local_keywords(Query); Lst -> Lst end;
-        _          -> local_keywords(Query)
+        {ok, Text} -> case parse_json_list(Text) of [] -> fallback_topics(Query); Lst -> Lst end;
+        _          -> fallback_topics(Query)
     end,
     Deduped = lists:usort(SubQueries),
     [Query | lists:delete(Query, Deduped)].
@@ -129,6 +129,31 @@ stopwords() ->
      <<"son">>,<<"ses">>,<<"nos">>,<<"vos">>,<<"leur">>,<<"the">>,
      <<"and">>,<<"for">>,<<"with">>,<<"from">>,<<"this">>,<<"that">>,
      <<"are">>,<<"was">>,<<"you">>,<<"your">>].
+
+%% @private Query the local HF topic-extraction microservice (KeyBERT +
+%% multilingual MiniLM). Returns [] on any error so callers fall back.
+-spec hf_topics(binary()) -> [binary()].
+hf_topics(Query) ->
+    _ = application:ensure_all_started(inets),
+    Body = iolist_to_binary(json:encode(#{<<"query">> => Query})),
+    Req  = {"http://127.0.0.1:8085/topics", [], "application/json", Body},
+    case httpc:request(post, Req, [{timeout, 4000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, RespBin}} ->
+            case catch json:decode(RespBin) of
+                #{<<"topics">> := Ts} when is_list(Ts) ->
+                    [T || T <- Ts, is_binary(T), T =/= <<>>];
+                _ -> []
+            end;
+        _ -> []
+    end.
+
+%% @private HF topics first, local keyword split as fallback.
+-spec fallback_topics(binary()) -> [binary()].
+fallback_topics(Query) ->
+    case hf_topics(Query) of
+        []  -> local_keywords(Query);
+        Ts  -> Ts
+    end.
 
 %%====================================================================
 %% Synthesis
