@@ -475,7 +475,7 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
         [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}],
         [binary()], binary()) ->
     {[non_neg_integer()], map()}.
-aggregate_and_rank(TaggedItems, _SubQueries, QueryVec) ->
+aggregate_and_rank(TaggedItems, SubQueries, QueryVec) ->
     %% Group by dedup key; preserve first-streamed (lowest Sid) as representative.
     Groups = lists:foldl(fun({Sid, Item, Rank, SubQ, Trust}, Acc) ->
         Key   = dedup_key(Item),
@@ -501,7 +501,14 @@ aggregate_and_rank(TaggedItems, _SubQueries, QueryVec) ->
         %% Semantic vector similarity — item text vs query vector.
         VecScore = lists:max([item_vec_score(QueryVec, I) || {_, I, _, _, _} <- Group]),
 
-        Score = Occ * 10 + RRF * 100 + Coverage * 15 + VecScore * 20,
+        %% How many distinct query words actually appear in this item's
+        %% text/url (title + resume + url). This dominates ranking so a
+        %% result matching more of the query rises to the top; the other
+        %% signals only break ties (search-engine style).
+        TextCov = lists:max([text_coverage(SubQueries, I)
+                             || {_, I, _, _, _} <- Group]),
+        Score = TextCov * 10000 + Coverage * 1000 + Occ * 50
+                + RRF * 100 + VecScore * 20,
         [{RepSid, Score} | Acc]
     end, [], Groups),
 
@@ -528,6 +535,52 @@ dedup_key(Item) ->
         <<>> when Label =/= <<>> -> {label, Label};
         <<>>                     -> {unique, erlang:unique_integer()};
         _                        -> {url, Url}
+    end.
+
+%%====================================================================
+%% Relevance: query-term coverage
+%%====================================================================
+
+%% @private Count distinct query words present in an item's text/url.
+-spec text_coverage([binary()], map()) -> non_neg_integer().
+text_coverage(SubQueries, Item) ->
+    Hay = item_haystack(Item),
+    length([T || T <- query_terms(SubQueries),
+                 binary:match(Hay, T) =/= nomatch]).
+
+%% @private Distinct significant words of the original query (its first
+%% element in the expanded list), lower-cased, length >= 2.
+-spec query_terms([binary()]) -> [binary()].
+query_terms([]) -> [];
+query_terms([Query | _]) ->
+    Parts = binary:split(hay_lower(Query),
+        [<<" ">>,<<",">>,<<".">>,<<";">>,<<":">>,<<"?">>,<<"!">>,
+         <<"(">>,<<")">>,<<"/">>,<<"-">>,<<"'">>],
+        [global, trim_all]),
+    lists:usort([P || P <- Parts, byte_size(P) >= 2]).
+
+%% @private Lower-cased title + resume + url of an item, for matching.
+-spec item_haystack(map()) -> binary().
+item_haystack(Item) ->
+    Props = maps:get(<<"properties">>, Item, Item),
+    Title = first_defined(Props, [<<"title">>, <<"label">>, <<"domain">>], <<>>),
+    Val   = first_defined(Props, [<<"resume">>, <<"value">>, <<"description">>], <<>>),
+    Url   = first_defined(Props, [<<"url">>], <<>>),
+    hay_lower(iolist_to_binary([to_bin_safe(Title), <<" ">>,
+                                to_bin_safe(Val), <<" ">>,
+                                to_bin_safe(Url)])).
+
+-spec to_bin_safe(term()) -> binary().
+to_bin_safe(B) when is_binary(B) -> B;
+to_bin_safe(L) when is_list(L)   -> case unicode:characters_to_binary(L) of
+                                        Bin when is_binary(Bin) -> Bin; _ -> <<>> end;
+to_bin_safe(_)                   -> <<>>.
+
+-spec hay_lower(binary()) -> binary().
+hay_lower(B) ->
+    case unicode:characters_to_binary(string:lowercase(B)) of
+        Bin when is_binary(Bin) -> Bin;
+        _ -> B
     end.
 
 %%====================================================================
