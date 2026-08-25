@@ -658,9 +658,20 @@ fetch_from_disco(Body, Url) ->
 %%--------------------------------------------------------------------
 -spec fetch_from_agent(binary(), string()) ->
     {ok, [map()]} | {error, term()}.
+agent_query_url(H, 443) ->
+    lists:flatten(io_lib:format("https://~s/agent/query", [H]));
+agent_query_url(H, QP) ->
+    lists:flatten(io_lib:format("http://~s:~w/agent/query", [H, QP])).
+
+em_auth_headers() ->
+    case application:get_env(em_filter, auth_token, undefined) of
+        undefined -> [];
+        Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
+    end.
+
 fetch_from_agent(Body, Url) ->
     case httpc:request(post,
-                       {Url, [], "application/json",
+                       {Url, em_auth_headers(), "application/json",
                         binary_to_list(Body)},
                        [{timeout, 8000}], [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, RespBody}} ->
@@ -693,7 +704,7 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         QP    = maps:get(query_port, PeerMap),
         Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
         Url   = lists:flatten(
-                    io_lib:format("http://~s:~w/agent/query", [H, QP])),
+                    agent_query_url(H, QP)),
         Body  = iolist_to_binary(json:encode(#{<<"query">> => Q})),
         Tag   = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
         case fetch_from_agent(Body, Url) of

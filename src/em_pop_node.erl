@@ -231,6 +231,11 @@ init(Opts) ->
     QueryPort = maps:get(query_port,      Opts, undefined),
     Name      = maps:get(name,            Opts, <<>>),
     Id      = generate_id(),
+    case os:getenv("EM_POP_AUTH_TOKEN") of
+        false -> ok;
+        ""    -> ok;
+        Tk    -> application:set_env(em_filter, auth_token, list_to_binary(Tk))
+    end,
 
     %% Vector dimension is byte_size / 4 because each float is 32-bit.
     Dim = byte_size(Vec) div 4,
@@ -650,6 +655,8 @@ listener_ref(Port) -> {em_pop_listener, Port}.
 
 %% Build the full URL for a peer's gossip endpoint.
 -spec gossip_url(string(), inet:port_number()) -> string().
+gossip_url(Host, 443) ->
+    lists:flatten(io_lib:format("https://~s/pop/gossip", [Host]));
 gossip_url(Host, Port) ->
     lists:flatten(io_lib:format("http://~s:~w/pop/gossip", [Host, Port])).
 
@@ -664,7 +671,11 @@ gossip_url(Host, Port) ->
 -spec http_post(string(), map()) -> {ok, map()} | {error, term()}.
 http_post(Url, Payload) ->
     Body = iolist_to_binary(json:encode(Payload)),
-    Req  = {Url, [], "application/json", Body},
+    Hdrs = case application:get_env(em_filter, auth_token, undefined) of
+               undefined -> [];
+               Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
+           end,
+    Req  = {Url, Hdrs, "application/json", Body},
     Opts = [{timeout, ?GOSSIP_HTTP_TIMEOUT}],
     case httpc:request(post, Req, Opts, [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, RespBody}} ->
