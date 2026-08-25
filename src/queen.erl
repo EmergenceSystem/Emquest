@@ -102,13 +102,41 @@ expand(Query) ->
         Conf,
         <<"You extract search keywords. Reply only with a JSON array of strings.">>
     ),
-    SubQueries = case call_handler(maps:get(provider, Conf, <<"mistral">>),
-                                   Prompt, HandlerConf) of
+    SubQueries = case call_handler_timeout(maps:get(provider, Conf, <<"mistral">>),
+                                   Prompt, HandlerConf, llm_timeout(Conf)) of
         {ok, Text} -> case parse_json_list(Text) of [] -> fallback_topics(Query); Lst -> Lst end;
         _          -> fallback_topics(Query)
     end,
     Deduped = lists:usort(SubQueries),
     [Query | lists:delete(Query, Deduped)].
+
+%% @private Run an LLM handler with a hard timeout so a slow or unavailable
+%% provider (e.g. ollama down) falls back to topic extraction instead of
+%% hanging the request. Returns {error, timeout} past the deadline.
+-spec call_handler_timeout(binary(), binary(), map(), pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+call_handler_timeout(Provider, Prompt, Conf, TimeoutMs) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, MRef} = spawn_monitor(fun() ->
+        Parent ! {Ref, (catch call_handler(Provider, Prompt, Conf))}
+    end),
+    receive
+        {Ref, Res} -> erlang:demonitor(MRef, [flush]), Res;
+        {'DOWN', MRef, _, _, Reason} -> {error, Reason}
+    after TimeoutMs ->
+        exit(Pid, kill), erlang:demonitor(MRef, [flush]), {error, timeout}
+    end.
+
+%% @private LLM call timeout in ms from [llm] timeout_ms (default 4000).
+-spec llm_timeout(map()) -> pos_integer().
+llm_timeout(Conf) ->
+    case maps:get(timeout_ms, Conf, undefined) of
+        undefined            -> 4000;
+        B when is_binary(B)  -> try binary_to_integer(B) catch _:_ -> 4000 end;
+        N when is_integer(N), N > 0 -> N;
+        _                    -> 4000
+    end.
 
 %% @private Local keyword fallback (no LLM): split a phrase into topic
 %% words, dropping short tokens and common FR/EN stopwords.
@@ -496,6 +524,7 @@ handler_conf(Provider, Conf, SysPrompt) ->
         _             -> mistral_handler:get_env_config()
     end,
     Overrides = maps:filter(fun(_, V) -> V =/= undefined end, #{
+        endpoint      => maps:get(endpoint,    Conf, undefined),
         model         => maps:get(model,       Conf, undefined),
         temperature   => maps:get(temperature, Conf, undefined),
         system_prompt => ensure_binary(SysPrompt)
