@@ -344,44 +344,100 @@ function escHtml(s) {
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/* ── Peers (keyed reconciliation — no full rebuild) ────────────────── */
+
+function peerKey(p) {
+    return (p.name || '?') + '|' + (p.host || '?') + '|'
+         + (p.query_port != null ? p.query_port : '');
+}
+
+function sortPeers(peers) {
+    return peers.slice().sort((a, b) => {
+        const ka = (a.name || a.host || '').toLowerCase();
+        const kb = (b.name || b.host || '').toLowerCase();
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return (a.host || '').localeCompare(b.host || '');
+    });
+}
+
+function peerSignature(p) {
+    return (p.routable ? 'r' : 'g') + '|' + p.host + '|'
+         + p.query_port + '|' + (p.name || '');
+}
+
+function cardMarkup(peer) {
+    const routable    = peer.routable;
+    const addr        = routable ? (peer.host + ':' + peer.query_port)
+                                 : String(peer.host);
+    const displayName = peer.name ? peer.name : addr;
+    return `
+        <div class="agent-name">
+            <span class="agent-dot${routable ? '' : ' agent-dot--gossip'}"></span>
+            ${escHtml(displayName)}
+        </div>
+        <div class="caps">
+            <span class="cap${routable ? '' : ' cap--gossip'}">${routable ? 'routable' : 'gossip only'}</span>
+        </div>
+        ${routable ? `<div class="agent-addr">${escHtml(addr)}</div>` : ''}
+    `;
+}
+
+let cardIndex = new Map();
+
 function renderPeers(peers) {
-    const grid    = document.getElementById('agents-grid');
-    const statP   = document.getElementById('stat-peers');
-    const statR   = document.getElementById('stat-routable');
-    const footer  = document.getElementById('footer-count');
+    const grid   = document.getElementById('agents-grid');
+    const statP  = document.getElementById('stat-peers');
+    const statR  = document.getElementById('stat-routable');
+    const footer = document.getElementById('footer-count');
 
     const routableCount = peers.filter(p => p.routable).length;
     statP.textContent  = peers.length;
     statR.textContent  = routableCount;
-    footer.textContent = `${peers.length} peer${peers.length !== 1 ? 's' : ''} discovered`;
+    footer.textContent = peers.length + ' peer' + (peers.length !== 1 ? 's' : '')
+                       + ' discovered';
+
+    grid.querySelectorAll('.grid-placeholder').forEach(el => el.remove());
 
     if (peers.length === 0) {
-        grid.innerHTML = `<div style="color:var(--muted);font-size:0.8rem;grid-column:1/-1">No peers discovered yet — gossip is running.</div>`;
+        for (const [, el] of cardIndex) el.remove();
+        cardIndex.clear();
+        const ph = document.createElement('div');
+        ph.className = 'grid-placeholder';
+        ph.style.cssText = 'color:var(--muted);font-size:0.8rem;grid-column:1/-1';
+        ph.textContent = 'No peers discovered yet — gossip is running.';
+        grid.appendChild(ph);
         return;
     }
 
-    grid.innerHTML = '';
-    peers.forEach((peer, i) => {
-        const routable    = peer.routable;
-        const addr        = routable
-            ? `${peer.host}:${peer.query_port}`
-            : String(peer.host);
-        const displayName = peer.name ? peer.name : addr;
-        const card = document.createElement('div');
-        card.className = 'agent-card' + (routable ? '' : ' agent-card--gossip');
-        card.style.animationDelay = `${Math.min(i * 40, 600)}ms`;
-        card.innerHTML = `
-            <div class="agent-name">
-                <span class="agent-dot${routable ? '' : ' agent-dot--gossip'}"></span>
-                ${escHtml(displayName)}
-            </div>
-            <div class="caps">
-                <span class="cap${routable ? '' : ' cap--gossip'}">${routable ? 'routable' : 'gossip only'}</span>
-            </div>
-            ${routable ? `<div class="agent-addr">${escHtml(addr)}</div>` : ''}
-        `;
-        grid.appendChild(card);
-    });
+    const sorted = sortPeers(peers);
+    const wanted = new Set(sorted.map(peerKey));
+
+    for (const [key, el] of cardIndex) {
+        if (!wanted.has(key)) { el.remove(); cardIndex.delete(key); }
+    }
+
+    let prev = null;
+    for (const peer of sorted) {
+        const key = peerKey(peer);
+        const sig = peerSignature(peer);
+        let card  = cardIndex.get(key);
+        if (card) {
+            if (card.dataset.sig !== sig) {
+                card.className = 'agent-card' + (peer.routable ? '' : ' agent-card--gossip');
+                card.innerHTML = cardMarkup(peer);
+                card.dataset.sig = sig;
+            }
+        } else {
+            card = document.createElement('div');
+            card.className   = 'agent-card' + (peer.routable ? '' : ' agent-card--gossip');
+            card.dataset.sig = sig;
+            card.innerHTML   = cardMarkup(peer);
+            cardIndex.set(key, card);
+        }
+        const target = prev ? prev.nextSibling : grid.firstChild;
+        if (card !== target) grid.insertBefore(card, target);
+        prev = card;
+    }
 }
 
 function showError(msg) {
@@ -389,10 +445,17 @@ function showError(msg) {
     const statP  = document.getElementById('stat-peers');
     const statR  = document.getElementById('stat-routable');
     const footer = document.getElementById('footer-count');
-    if (grid) grid.innerHTML = `
-        <div class="error-msg" style="grid-column:1/-1">
-            <span>⚠</span><span>Could not load peers: ${escHtml(msg)}</span>
-        </div>`;
+    if (grid) {
+        for (const [, el] of cardIndex) el.remove();
+        cardIndex.clear();
+        grid.querySelectorAll('.grid-placeholder').forEach(el => el.remove());
+        const err = document.createElement('div');
+        err.className = 'grid-placeholder error-msg';
+        err.style.gridColumn = '1/-1';
+        err.innerHTML = '<span>⚠</span><span>Could not load peers: '
+                      + escHtml(msg) + '</span>';
+        grid.appendChild(err);
+    }
     if (statP)  statP.textContent  = '—';
     if (statR)  statR.textContent  = '—';
     if (footer) footer.textContent = 'peer table unavailable';
