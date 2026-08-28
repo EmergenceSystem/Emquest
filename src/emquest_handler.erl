@@ -42,7 +42,7 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_preview/1]).
+-export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -146,7 +146,28 @@ init(Req0, media) ->
 init(Req0, media_prepare) ->
     Id = cowboy_req:binding(id, Req0),
     {Code, Body} = velora_prepare_poll(Id),
-    {ok, cowboy_req:reply(Code, media_ct(), json:encode(Body), Req0), media_prepare}.
+    {ok, cowboy_req:reply(Code, media_ct(), json:encode(Body), Req0), media_prepare};
+init(Req0, stt) ->
+    case cowboy_req:method(Req0) of
+        <<"POST">> ->
+            case read_upload(Req0) of
+                {ok, _Filename, Bytes, Req1} ->
+                    case stt_forward(<<"audio.wav">>, Bytes) of
+                        {ok, Text} ->
+                            {ok, cowboy_req:reply(200, media_ct(),
+                                json:encode(#{<<"text">> => Text}), Req1), stt};
+                        {error, Reason} ->
+                            {ok, cowboy_req:reply(502, media_ct(),
+                                json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
+                    end;
+                {error, Reason, Req1} ->
+                    {ok, cowboy_req:reply(400, media_ct(),
+                        json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
+            end;
+        _ ->
+            {ok, cowboy_req:reply(405, media_ct(),
+                <<"{\"error\":\"Use POST\"}">>, Req0), stt}
+    end.
 
 %%====================================================================
 %% Media (image -> velora)
@@ -197,6 +218,36 @@ media_err(Req, Code, Reason) ->
 media_ct() -> #{<<"content-type">> => <<"application/json">>}.
 media_ebin(B) when is_binary(B) -> B;
 media_ebin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
+
+stt_base() -> application:get_env(emquest, stt_url, "http://127.0.0.1:8086").
+
+stt_forward(Filename, Bytes) ->
+    {Boundary, MBody} = build_stt_multipart(Filename, Bytes),
+    CT = "multipart/form-data; boundary=" ++ Boundary,
+    case httpc:request(post,
+                       {stt_base() ++ "/inference", [], CT, MBody},
+                       [{timeout, 30000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _Hdrs, Body}} -> {ok, parse_stt_text(Body)};
+        {ok, {{_, Code, _}, _, _}}        -> {error, iolist_to_binary(io_lib:format("stt ~w", [Code]))};
+        {error, R}                        -> {error, R}
+    end.
+
+%% whisper.cpp /inference returns {"text": "..."}.
+parse_stt_text(Body) ->
+    case (try json:decode(Body) catch _:_ -> #{} end) of
+        #{<<"text">> := T} when is_binary(T) -> string:trim(T);
+        _ -> <<>>
+    end.
+
+build_stt_multipart(Filename, Bytes) ->
+    Boundary = "emqstt" ++ integer_to_list(erlang:unique_integer([positive])),
+    Body = iolist_to_binary([
+        "--", Boundary, "\r\n",
+        "Content-Disposition: form-data; name=\"file\"; filename=\"", Filename, "\"\r\n",
+        "Content-Type: audio/wav\r\n\r\n",
+        Bytes, "\r\n",
+        "--", Boundary, "--\r\n"]),
+    {Boundary, Body}.
 
 %% Read the first multipart file part; returns {ok, Filename, Bytes, Req}.
 read_upload(Req0) ->
