@@ -568,7 +568,44 @@ function showRaster(card) {
   if (!micBtn || !input) return;
 
   let recorder = null, chunks = [], stream = null, recording = false;
+  let vadRAF = null, vadCtx = null;
   const setStatus = m => { if (status) status.textContent = m || ''; };
+
+  function stopVad() {
+    if (vadRAF) { cancelAnimationFrame(vadRAF); vadRAF = null; }
+    if (vadCtx) { try { vadCtx.close(); } catch (_) {} vadCtx = null; }
+  }
+
+  // Auto-stop: once speech is heard, stop after ~1.2s of continuous silence
+  // (also a hard 15s cap). Manual click on the mic still stops immediately.
+  function startVad(mediaStream) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    vadCtx = new AC();
+    const src = vadCtx.createMediaStreamSource(mediaStream);
+    const an = vadCtx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    const SPEECH = 0.02, SILENCE = 0.015, SILENCE_MS = 1200, MAX_MS = 15000;
+    let spoke = false, silenceStart = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      if (!recording || !recorder) return;
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      const now = performance.now();
+      if (rms > SPEECH) { spoke = true; silenceStart = 0; }
+      else if (spoke && rms < SILENCE) {
+        if (!silenceStart) silenceStart = now;
+        else if (now - silenceStart > SILENCE_MS) { recorder.stop(); return; }
+      } else if (spoke) { silenceStart = 0; }
+      if (now - t0 > MAX_MS) { recorder.stop(); return; }
+      vadRAF = requestAnimationFrame(tick);
+    };
+    vadRAF = requestAnimationFrame(tick);
+  }
 
   micBtn.addEventListener('click', async () => {
     if (recording) { recorder && recorder.stop(); return; }
@@ -580,6 +617,7 @@ function showRaster(card) {
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     recorder.onstop = async () => {
       recording = false; micBtn.classList.remove('recording');
+      stopVad();
       stream.getTracks().forEach(t => t.stop());
       setStatus('transcribing...');
       try {
@@ -598,7 +636,9 @@ function showRaster(card) {
       } catch (_) { setStatus('stt failed'); }
     };
     recorder.start();
-    recording = true; micBtn.classList.add('recording'); setStatus('listening... click mic to stop');
+    recording = true; micBtn.classList.add('recording');
+    setStatus('listening... (auto-stops on silence, or click mic)');
+    startVad(stream);
   });
 
   // Decode any recorded blob and re-encode as 16 kHz mono 16-bit WAV.
