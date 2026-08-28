@@ -565,9 +565,32 @@ merge_peers([P | Rest],
             #state{peers = Peers, max_peers = Max, kvex_ix = Ix} = State) ->
     case maps:is_key(P#peer.id, Peers) of
         true ->
-            %% Already in the table — direct contact (upsert_peer) will
-            %% refresh it when we gossip with it.
-            merge_peers(Rest, State);
+            Old = maps:get(P#peer.id, Peers),
+            case Old#peer.host =:= P#peer.host
+                 andalso Old#peer.base_path =:= P#peer.base_path of
+                true ->
+                    %% Same address — leave it; direct contact refreshes it.
+                    merge_peers(Rest, State);
+                false ->
+                    %% A hub re-advertised this peer at a different (rewritten)
+                    %% address; adopt it so we query the right endpoint.
+                    case Old#peer.host =:= <<"localhost">>
+                         orelse Old#peer.host =:= <<"127.0.0.1">> of
+                        true ->
+                            %% Keep a directly-registered local leaf; never let a
+                            %% rewritten public address learned via gossip clobber
+                            %% its localhost registration (that would stop us from
+                            %% advertising our own leaf).
+                            merge_peers(Rest, State);
+                        false ->
+                            Updated = Old#peer{host       = P#peer.host,
+                                               port       = P#peer.port,
+                                               query_port = P#peer.query_port,
+                                               base_path  = P#peer.base_path,
+                                               last_seen  = erlang:monotonic_time(millisecond)},
+                            merge_peers(Rest, State#state{peers = Peers#{P#peer.id => Updated}})
+                    end
+            end;
         false when map_size(Peers) >= Max ->
             %% Peer list at capacity — stop adding more.
             ?LOG_DEBUG("em_pop max_peers=~w reached, dropping new peer", [Max]),
