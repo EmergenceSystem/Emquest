@@ -86,6 +86,12 @@
 -define(TRUST_MAX,                  1.00).
 -define(TRUST_MIN,                  0.00).
 
+%% Consecutive failed direct contacts before a peer is declared dead.
+-define(DEFAULT_DEAD_THRESHOLD,        3).
+
+%% Milliseconds a dead peer is refused re-entry (blocks gossip re-infection).
+-define(DEFAULT_QUARANTINE_TTL,   60_000).
+
 %%====================================================================
 %% Records
 %%====================================================================
@@ -101,7 +107,8 @@
     trust = 0.0            :: float(),            %% trust score in [0.0, 1.0]
     last_seen              :: integer(),          %% erlang:monotonic_time(millisecond)
     base_path = <<>>       :: binary(),           %% public path prefix (hub-rewritten leaf)
-    role = hub             :: leaf | hub          %% role advertised by this peer
+    role = hub             :: leaf | hub,         %% role advertised by this peer
+    fail_count = 0         :: non_neg_integer()   %% consecutive failed direct contacts
 }).
 
 %% gen_server state for the local node.
@@ -117,7 +124,10 @@
     stale_timeout               :: pos_integer(),              %% peer eviction threshold (ms)
     gossip_interval             :: non_neg_integer(),          %% background tick interval (ms)
     max_peers                   :: pos_integer(),              %% peer list capacity
-    seeds = []                  :: [{string(), inet:port_number()}]  %% bootstrap/heal seeds
+    seeds = []                  :: [{string(), inet:port_number()}],  %% bootstrap/heal seeds
+    quarantine = #{}            :: #{binary() => integer()},          %% dead peer id => expiry (mono ms)
+    dead_threshold = 3          :: pos_integer(),                     %% failed contacts before dead
+    quarantine_ttl = 60000      :: pos_integer()                     %% ms a dead peer is refused
 }).
 
 %%====================================================================
@@ -229,6 +239,8 @@ init(Opts) ->
     Port      = maps:get(port,            Opts),
     Vec       = maps:get(vector,          Opts),
     StaleT    = maps:get(stale_timeout,   Opts, ?DEFAULT_STALE_TIMEOUT),
+    DeadT     = maps:get(dead_threshold,  Opts, ?DEFAULT_DEAD_THRESHOLD),
+    QTtl      = maps:get(quarantine_ttl,  Opts, ?DEFAULT_QUARANTINE_TTL),
     GossipI   = maps:get(gossip_interval, Opts, ?DEFAULT_GOSSIP_INTERVAL),
     Seeds     = maps:get(seeds, Opts, []),
     MaxP      = maps:get(max_peers,       Opts, ?DEFAULT_MAX_PEERS),
@@ -271,7 +283,9 @@ init(Opts) ->
         stale_timeout   = StaleT,
         gossip_interval = GossipI,
         max_peers       = MaxP,
-        seeds           = Seeds
+        seeds           = Seeds,
+        dead_threshold  = DeadT,
+        quarantine_ttl  = QTtl
     }}.
 
 %% --- Simple state accessors ---
@@ -366,8 +380,8 @@ handle_call(gossip_tick, _From, State) ->
         {error, Reason} ->
             ?LOG_DEBUG("em_pop gossip_tick failed peer=~s reason=~p",
                        [short_id(PeerId), Reason]),
-            %% Failed exchange — penalise the peer's trust score.
-            decay_trust(PeerId, State)
+            %% Failed exchange — count it toward quarantine.
+            mark_failure(PeerId, State)
     end,
     {reply, ok, NewState};
 
@@ -448,7 +462,7 @@ handle_info({gossip_result, _PeerId, {ok, RemotePayload}}, State) ->
 handle_info({gossip_result, PeerId, {error, Reason}}, State) ->
     ?LOG_DEBUG("em_pop bg gossip failed peer=~s reason=~p",
                [short_id(PeerId), Reason]),
-    {noreply, decay_trust(PeerId, State)};
+    {noreply, mark_failure(PeerId, State)};
 
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -506,21 +520,25 @@ upsert_peer(#peer{id = Id} = New,
             kvex:add(Ix, Id, New#peer.vector),
             {?TRUST_INIT, false}
     end,
+    Q1 = maps:remove(Id, State#state.quarantine),
     case NeedsReindex of
         true ->
             %% Vector changed — rebuild the entire index for consistency.
             rebuild_kvex(State#state{
+                quarantine = Q1,
                 peers = Peers#{Id => New#peer{
-                    trust     = Trust,
-                    last_seen = erlang:monotonic_time(millisecond)
+                    trust      = Trust,
+                    fail_count = 0,
+                    last_seen  = erlang:monotonic_time(millisecond)
                 }}
             });
         false ->
             Updated = New#peer{
-                trust     = Trust,
-                last_seen = erlang:monotonic_time(millisecond)
+                trust      = Trust,
+                fail_count = 0,
+                last_seen  = erlang:monotonic_time(millisecond)
             },
-            State#state{peers = Peers#{Id => Updated}}
+            State#state{quarantine = Q1, peers = Peers#{Id => Updated}}
     end.
 
 %%--------------------------------------------------------------------
@@ -539,6 +557,32 @@ decay_trust(PeerId, #state{peers = Peers} = State) ->
             State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
         error ->
             %% Peer disappeared between the spawn and the result — ignore.
+            State
+    end.
+
+%% @private
+%% @doc Count a failed direct contact; after dead_threshold consecutive
+%% failures evict the peer and quarantine it so gossip cannot re-learn it
+%% until it comes back (and answers) again.
+-spec mark_failure(binary(), #state{}) -> #state{}.
+mark_failure(PeerId, #state{peers = Peers, quarantine = Q,
+                            dead_threshold = DeadT, quarantine_ttl = TTL} = State) ->
+    case maps:find(PeerId, Peers) of
+        {ok, #peer{fail_count = FC, trust = T} = Peer} ->
+            FC1 = FC + 1,
+            case FC1 >= DeadT of
+                true ->
+                    Now = erlang:monotonic_time(millisecond),
+                    rebuild_kvex(State#state{
+                        peers      = maps:remove(PeerId, Peers),
+                        quarantine = Q#{PeerId => Now + TTL}
+                    });
+                false ->
+                    NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
+                    State#state{peers = Peers#{PeerId =>
+                        Peer#peer{fail_count = FC1, trust = NewTrust}}}
+            end;
+        error ->
             State
     end.
 
@@ -562,7 +606,13 @@ merge_peers([#peer{id = Id} | Rest], #state{id = Id} = State) ->
     %% This entry describes ourselves — skip.
     merge_peers(Rest, State);
 merge_peers([P | Rest],
-            #state{peers = Peers, max_peers = Max, kvex_ix = Ix} = State) ->
+            #state{peers = Peers, max_peers = Max, kvex_ix = Ix,
+                   quarantine = Q} = State) ->
+    Now = erlang:monotonic_time(millisecond),
+    Quarantined = case maps:find(P#peer.id, Q) of
+                      {ok, Exp} -> Now < Exp;
+                      error     -> false
+                  end,
     case maps:is_key(P#peer.id, Peers) of
         true ->
             Old = maps:get(P#peer.id, Peers),
@@ -591,6 +641,9 @@ merge_peers([P | Rest],
                             merge_peers(Rest, State#state{peers = Peers#{P#peer.id => Updated}})
                     end
             end;
+        false when Quarantined ->
+            %% Recently declared dead — refuse re-entry until quarantine expires.
+            merge_peers(Rest, State);
         false when map_size(Peers) >= Max ->
             %% Peer list at capacity — stop adding more.
             ?LOG_DEBUG("em_pop max_peers=~w reached, dropping new peer", [Max]),
@@ -619,8 +672,10 @@ merge_peers([P | Rest],
 %% @end
 %%--------------------------------------------------------------------
 -spec cleanup_stale(pos_integer(), #state{}) -> #state{}.
-cleanup_stale(Timeout, #state{peers = Peers} = State) ->
+cleanup_stale(Timeout, #state{peers = Peers, quarantine = Q0} = State0) ->
     Now   = erlang:monotonic_time(millisecond),
+    Q1    = maps:filter(fun(_, Exp) -> Now < Exp end, Q0),
+    State = State0#state{quarantine = Q1},
     Alive = maps:filter(fun(_, #peer{last_seen = LS}) ->
         Now - LS < Timeout
     end, Peers),
