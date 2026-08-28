@@ -381,7 +381,7 @@ run_pipeline(Query, Req) ->
     %% Step 3 — em_pop fan-out: query vector → top-K peers → direct HTTP.
     %% Runs in parallel with the disco fan-out above.
     QueryVec = em_filter_vec:from_capabilities(SubQueries),
-    PopPeers = try emquest_pop:peers_for_query(QueryVec, 10)
+    PopPeers = try emquest_pop:peers_for_query(QueryVec, 20)
                catch
                    exit:{noproc, _}       -> [];  %% emquest_pop not started
                    exit:{timeout, _}      -> [];  %% gen_server call timeout
@@ -658,10 +658,10 @@ fetch_from_disco(Body, Url) ->
 %%--------------------------------------------------------------------
 -spec fetch_from_agent(binary(), string()) ->
     {ok, [map()]} | {error, term()}.
-agent_query_url(H, 443) ->
-    lists:flatten(io_lib:format("https://~s/agent/query", [H]));
-agent_query_url(H, QP) ->
-    lists:flatten(io_lib:format("http://~s:~w/agent/query", [H, QP])).
+agent_query_url(H, 443, BP) ->
+    lists:flatten(io_lib:format("https://~s~s/agent/query", [H, BP]));
+agent_query_url(H, QP, BP) ->
+    lists:flatten(io_lib:format("http://~s:~w~s/agent/query", [H, QP, BP])).
 
 em_auth_headers() ->
     case application:get_env(em_filter, auth_token, undefined) of
@@ -703,8 +703,9 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         H     = binary_to_list(maps:get(host, PeerMap)),
         QP    = maps:get(query_port, PeerMap),
         Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
+        BP    = binary_to_list(maps:get(base_path, PeerMap, <<>>)),
         Url   = lists:flatten(
-                    agent_query_url(H, QP)),
+                    agent_query_url(H, QP, BP)),
         Body  = iolist_to_binary(json:encode(#{<<"query">> => Q})),
         Tag   = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
         case fetch_from_agent(Body, Url) of

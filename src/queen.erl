@@ -339,14 +339,25 @@ disco_nodes() ->
 -spec pop_seeds() -> [{string(), pos_integer()}].
 pop_seeds() ->
     DiscoConf = read_disco_conf(),
-    case maps:get("pop_port", DiscoConf, undefined) of
-        undefined ->
-            [];
-        PortStr ->
-            PopPort = list_to_integer(string:trim(PortStr)),
-            Hosts   = extract_disco_hosts(DiscoConf),
-            [{H, PopPort} || H <- Hosts]
-    end.
+    Default = case maps:get("pop_port", DiscoConf, undefined) of
+                  undefined -> 9100;
+                  PortStr   -> list_to_integer(string:trim(PortStr))
+              end,
+    NodesStr = maps:get("nodes", DiscoConf,
+                   maps:get("host", DiscoConf, "localhost")),
+    Entries = string:split(NodesStr, ",", all),
+    lists:filtermap(fun(E) ->
+        case string:trim(E) of
+            "" -> false;
+            T  ->
+                case string:split(T, ":", trailing) of
+                    [H, P] ->
+                        try {true, {string:trim(H), list_to_integer(string:trim(P))}}
+                        catch _:_ -> {true, {string:trim(T), Default}} end;
+                    [H] -> {true, {string:trim(H), Default}}
+                end
+        end
+    end, Entries).
 
 %%--------------------------------------------------------------------
 %% @doc Return the em_pop listener port for the Emquest node.

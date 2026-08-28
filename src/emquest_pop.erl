@@ -93,6 +93,7 @@ init(Opts) ->
     Seeds = maps:get(seeds, Opts, queen:pop_seeds()),
     NodeOpts = #{port            => Port,
                  vector          => Vec,
+                 seeds           => Seeds,
                  max_peers       => ?MAX_PEERS,
                  gossip_interval => 5_000,
                  stale_timeout   => 300_000},  %% 5 min: full round with 30 peers at 5s/peer = 150s

@@ -99,7 +99,9 @@
     name = <<>>            :: binary(),           %% human-readable agent name (OTP app name)
     vector                 :: binary(),           %% capability vector (f32 flat binary)
     trust = 0.0            :: float(),            %% trust score in [0.0, 1.0]
-    last_seen              :: integer()           %% erlang:monotonic_time(millisecond)
+    last_seen              :: integer(),          %% erlang:monotonic_time(millisecond)
+    base_path = <<>>       :: binary(),           %% public path prefix (hub-rewritten leaf)
+    role = hub             :: leaf | hub          %% role advertised by this peer
 }).
 
 %% gen_server state for the local node.
@@ -114,7 +116,8 @@
     kvex_ix                     :: term(),                     %% kvex cosine-search index
     stale_timeout               :: pos_integer(),              %% peer eviction threshold (ms)
     gossip_interval             :: non_neg_integer(),          %% background tick interval (ms)
-    max_peers                   :: pos_integer()               %% peer list capacity
+    max_peers                   :: pos_integer(),              %% peer list capacity
+    seeds = []                  :: [{string(), inet:port_number()}]  %% bootstrap/heal seeds
 }).
 
 %%====================================================================
@@ -227,6 +230,7 @@ init(Opts) ->
     Vec       = maps:get(vector,          Opts),
     StaleT    = maps:get(stale_timeout,   Opts, ?DEFAULT_STALE_TIMEOUT),
     GossipI   = maps:get(gossip_interval, Opts, ?DEFAULT_GOSSIP_INTERVAL),
+    Seeds     = maps:get(seeds, Opts, []),
     MaxP      = maps:get(max_peers,       Opts, ?DEFAULT_MAX_PEERS),
     QueryPort = maps:get(query_port,      Opts, undefined),
     Name      = maps:get(name,            Opts, <<>>),
@@ -266,7 +270,8 @@ init(Opts) ->
         kvex_ix         = Ix,
         stale_timeout   = StaleT,
         gossip_interval = GossipI,
-        max_peers       = MaxP
+        max_peers       = MaxP,
+        seeds           = Seeds
     }}.
 
 %% --- Simple state accessors ---
@@ -419,6 +424,15 @@ handle_info(gossip_timer, #state{gossip_interval = I,
     end,
     %% Evict stale peers before rescheduling.
     State1 = cleanup_stale(St, State),
+    SelfPid0 = self(),
+    %% Always re-gossip the configured seeds each tick so the federation
+    %% anchors (and the leaves they advertise) never age out between the rare
+    %% random-target gossips.
+    lists:foreach(fun({SdH, SdP}) ->
+        spawn(fun() ->
+            catch gen_server:call(SelfPid0, {add_peer, SdH, SdP}, 15_000)
+        end)
+    end, State1#state.seeds),
     erlang:send_after(I, self(), gossip_timer),
     {noreply, State1};
 
@@ -559,14 +573,18 @@ merge_peers([P | Rest],
             ?LOG_DEBUG("em_pop max_peers=~w reached, dropping new peer", [Max]),
             State;
         false ->
-            %% New peer discovered transitively — index it and add to map.
-            kvex:add(Ix, P#peer.id, P#peer.vector),
-            NewPeer = P#peer{
-                trust     = ?TRUST_MIN,
-                last_seen = erlang:monotonic_time(millisecond)
-            },
-            State1 = State#state{peers = Peers#{P#peer.id => NewPeer}},
-            merge_peers(Rest, State1)
+            ExpBytes = byte_size(State#state.vector),
+            case byte_size(P#peer.vector) =:= ExpBytes andalso ExpBytes > 0 of
+                false -> merge_peers(Rest, State);
+                true ->
+                    kvex:add(Ix, P#peer.id, P#peer.vector),
+                    NewPeer = P#peer{
+                        trust     = ?TRUST_MIN,
+                        last_seen = erlang:monotonic_time(millisecond)
+                    },
+                    State1 = State#state{peers = Peers#{P#peer.id => NewPeer}},
+                    merge_peers(Rest, State1)
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -740,6 +758,11 @@ payload_to_peer(#{<<"id">>     := Id,
         query_port = QPort,
         name       = Name,
         vector     = base64:decode(Vec),
+        base_path  = maps:get(<<"base_path">>, Map, <<>>),
+        role       = case maps:get(<<"role">>, Map, <<"hub">>) of
+                         <<"leaf">> -> leaf;
+                         _          -> hub
+                     end,
         %% Set last_seen to now — we just heard from this node.
         last_seen  = erlang:monotonic_time(millisecond)
     }.
@@ -756,7 +779,8 @@ payload_to_peers(_) ->
 -spec peer_to_map(#peer{}) -> map().
 peer_to_map(#peer{id = Id, host = H, port = P,
                   query_port = QP, name = Name,
-                  vector = V, trust = T, last_seen = LS}) ->
+                  vector = V, trust = T, last_seen = LS,
+                  base_path = BP, role = Role}) ->
     #{id         => Id,
       host       => H,
       port       => P,
@@ -764,7 +788,9 @@ peer_to_map(#peer{id = Id, host = H, port = P,
       name       => Name,
       vector     => V,
       trust      => T,
-      last_seen  => LS}.
+      last_seen  => LS,
+      base_path  => BP,
+      role       => Role}.
 
 %% Convert a list of #peer{} records to plain maps.
 -spec peers_to_maps([#peer{}]) -> [map()].
