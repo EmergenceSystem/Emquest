@@ -65,6 +65,7 @@ init([]) ->
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
                     {"/network/peers",  emquest_handler, network_peers},
+                    {"/stt",            emquest_handler, stt},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}

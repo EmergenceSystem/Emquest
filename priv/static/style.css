@@ -529,6 +529,18 @@ a.item-title:hover,
 .add-btn:hover { background: rgba(0, 220, 100, 0.10); color: rgba(0, 220, 100, 1); border-color: rgba(0, 220, 100, 0.5); }
 .add-btn svg { width: 18px; height: 18px; }
 
+.mic-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; margin-right: 4px;
+    background: transparent; color: rgba(0, 220, 100, 0.75);
+    border: 1px solid rgba(0, 220, 100, 0.25); border-radius: 8px;
+    cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.mic-btn:hover { background: rgba(0, 220, 100, 0.10); color: rgba(0, 220, 100, 1); border-color: rgba(0, 220, 100, 0.5); }
+.mic-btn svg { width: 18px; height: 18px; }
+.mic-btn.recording { color: #ff4b4b; animation: micpulse 1s ease-in-out infinite; }
+@keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
 .raster-card {
     border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
     overflow: hidden; background: rgba(255, 255, 255, 0.02);
