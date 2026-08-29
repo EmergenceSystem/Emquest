@@ -692,7 +692,7 @@ a.item-title:hover,
 .aplayer-vol-btn .ic-mute { display: none; }
 .aplayer.muted .ic-vol  { display: none; }
 .aplayer.muted .ic-mute { display: inline; }
-.aplayer-vol { flex: 0 0 auto; width: 64px; accent-color: var(--green); cursor: pointer; }
+.aplayer-vol { flex: 0 0 auto; width: 44px; accent-color: var(--green); cursor: pointer; }
 .aplayer-dl {
   flex: 0 0 auto; display: flex; align-items: center; color: var(--green);
   text-decoration: none; opacity: 0.8; transition: opacity 0.2s var(--ease), filter 0.2s var(--ease);
