@@ -432,6 +432,14 @@ function buildMediaBody(item) {
                     </button>
                     <div class="aplayer-bar"><div class="aplayer-fill"></div></div>
                     <span class="aplayer-time">0:00</span>
+                    <button class="aplayer-vol-btn" type="button" aria-label="Mute">
+                        <svg class="ic-vol" viewBox="0 0 24 24"><polygon points="4 9 4 15 8 15 13 20 13 4 8 9"/><path d="M16 8.5a4 4 0 0 1 0 7"/></svg>
+                        <svg class="ic-mute" viewBox="0 0 24 24"><polygon points="4 9 4 15 8 15 13 20 13 4 8 9"/><line x1="16" y1="9" x2="21" y2="15"/><line x1="21" y1="9" x2="16" y2="15"/></svg>
+                    </button>
+                    <input class="aplayer-vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+                    <a class="aplayer-dl" href="${escAttr(src)}" download target="_blank" rel="noopener" aria-label="Download" title="Download file">
+                        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><polyline points="7 11 12 16 17 11"/><line x1="5" y1="20" x2="19" y2="20"/></svg>
+                    </a>
                     <audio class="aplayer-audio" preload="none" src="${escAttr(src)}"></audio>
                 </div>` : ''}
             </div>`;
@@ -503,6 +511,22 @@ function initAudioPlayer(root) {
     const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
     if (audio.duration) audio.currentTime = p * audio.duration;
   });
+  const volBtn = root.querySelector('.aplayer-vol-btn');
+  const vol    = root.querySelector('.aplayer-vol');
+  const dl     = root.querySelector('.aplayer-dl');
+  if (vol) vol.addEventListener('input', e => {
+    e.stopPropagation();
+    audio.volume = parseFloat(vol.value);
+    audio.muted = audio.volume === 0;
+    el.classList.toggle('muted', audio.muted);
+  });
+  if (volBtn) volBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    audio.muted = !audio.muted;
+    el.classList.toggle('muted', audio.muted);
+    if (vol) vol.value = audio.muted ? 0 : (audio.volume || 1);
+  });
+  if (dl) dl.addEventListener('click', e => e.stopPropagation());
 }
 
 function openLightbox(src) {
