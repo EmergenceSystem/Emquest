@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=17">
+    <link rel="stylesheet" href="/static/style.css?v=18">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -67,6 +67,12 @@
                     <span class="meta-hint">↵ send &nbsp;·&nbsp; shift+↵ newline</span>
                     <span class="meta-status" id="meta-status"></span>
                 </div>
+                <div class="type-filters" id="type-filters" hidden>
+                    <label><input type="checkbox" value="text" checked> text</label>
+                    <label><input type="checkbox" value="image" checked> image</label>
+                    <label><input type="checkbox" value="audio" checked> audio</label>
+                    <label><input type="checkbox" value="video" checked> video</label>
+                </div>
             </div>
 
             <!-- System status -->
@@ -110,6 +116,6 @@
     </footer>
 
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=17"></script>
+    <script src="/static/emergence.js?v=18"></script>
 </body>
 </html>

@@ -148,17 +148,13 @@ async function submitQuery() {
     results.innerHTML =
         userPromptHtml(query) + `
         <div class="progress-log" id="progress-log"></div>
-        <div class="type-filters" id="type-filters">
-            <label><input type="checkbox" value="text" checked> text</label>
-            <label><input type="checkbox" value="image" checked> image</label>
-            <label><input type="checkbox" value="audio" checked> audio</label>
-            <label><input type="checkbox" value="video" checked> video</label>
-        </div>
         <ul class="items-list" id="results-list"></ul>
     `;
 
     hideAnswerPanel();
     initTypeFilters();
+    const tfbar = document.getElementById('type-filters');
+    if (tfbar) tfbar.hidden = false;
 
     try {
         const resp = await fetch('/query', {
@@ -539,9 +535,11 @@ function initAudioPlayer(root) {
 }
 
 // Media-type result filter (text / image / audio / video checkboxes).
+let _typeFiltersInit = false;
 function initTypeFilters() {
+  if (_typeFiltersInit) return;
   const tf = document.getElementById('type-filters');
-  if (tf) tf.addEventListener('change', applyTypeFilter);
+  if (tf) { tf.addEventListener('change', applyTypeFilter); _typeFiltersInit = true; }
 }
 function applyTypeFilter() {
   const tf   = document.getElementById('type-filters');
