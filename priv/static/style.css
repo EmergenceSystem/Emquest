@@ -619,7 +619,20 @@ a.item-title:hover,
   font-size: 11px; background: rgba(0,0,0,.72); color: #fff; border-radius: 3px;
 }
 .media-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-.media-audio-el { width: 100%; max-width: none; margin-top: 0; }
+.media-audio-el {
+  width: 100%; max-width: none; margin-top: 0;
+  color-scheme: dark;
+  accent-color: var(--green);
+  border: 1px solid var(--border-hi);
+  border-radius: 8px;
+  background: rgba(0, 220, 100, 0.04);
+  box-shadow: 0 0 0 3px var(--green-glow), 0 0 14px rgba(0, 220, 100, 0.18);
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.media-audio-el:hover {
+  border-color: rgba(0, 220, 100, 0.55);
+  box-shadow: 0 0 0 3px var(--green-glow), 0 0 20px rgba(0, 220, 100, 0.28);
+}
 .media-license {
   font-size: 10.5px; color: rgba(0, 220, 100, .5); margin-top: 2px;
 }
