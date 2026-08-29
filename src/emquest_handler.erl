@@ -432,12 +432,15 @@ run_pipeline(Query, Req) ->
     %% Step 3 — em_pop fan-out: query vector → top-K peers → direct HTTP.
     %% Runs in parallel with the disco fan-out above.
     QueryVec = em_filter_vec:from_capabilities(SubQueries),
-    PopPeers = try emquest_pop:peers_for_query(QueryVec, 20)
-               catch
-                   exit:{noproc, _}       -> [];  %% emquest_pop not started
-                   exit:{timeout, _}      -> [];  %% gen_server call timeout
-                   error:badarg           -> []   %% malformed vector (defensive)
-               end,
+    PopPeers0 = try emquest_pop:peers_for_query(QueryVec, 20)
+                catch
+                    exit:{noproc, _}       -> [];  %% emquest_pop not started
+                    exit:{timeout, _}      -> [];  %% gen_server call timeout
+                    error:badarg           -> []   %% malformed vector (defensive)
+                end,
+    %% Always include the media-bank filters so image/audio/video results
+    %% appear without the user having to type "photo"/"video" in the query.
+    PopPeers = ensure_media_peers(PopPeers0),
     PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
 
     %% Report how many sources we are waiting on.
@@ -769,6 +772,26 @@ fetch_from_agent(Body, Url) ->
 %%   `[{#{host := H, query_port := QP, ...}, Score}]'.
 %% @end
 %%--------------------------------------------------------------------
+%% @private
+%% @doc Append the media-bank filters (images/audio/video) to the hash-selected
+%% peer set, so a plain query like "f40" also reaches them. Deduplicated by
+%% endpoint; media filters already selected are not added twice.
+ensure_media_peers(Selected) ->
+    Always = [<<"openverse_filter">>, <<"wikimedia_commons_filter">>,
+              <<"artic_filter">>, <<"nasa_images_filter">>,
+              <<"sepiasearch_filter">>],
+    SelKeys = [endpoint_key(P) || {P, _} <- Selected],
+    All = try emquest_pop:all_peers() catch _:_ -> [] end,
+    Extra = [{P, 1.0}
+             || P <- All,
+                lists:member(maps:get(name, P, <<>>), Always),
+                maps:get(query_port, P, undefined) =/= undefined,
+                not lists:member(endpoint_key(P), SelKeys)],
+    Selected ++ Extra.
+
+endpoint_key(P) ->
+    {maps:get(host, P, undefined), maps:get(query_port, P, undefined)}.
+
 -spec spawn_pop_workers([binary()], [{map(), float()}], pid()) -> [pid()].
 spawn_pop_workers(SubQueries, Peers, Parent) ->
     [spawn(fun() ->
