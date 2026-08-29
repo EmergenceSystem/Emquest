@@ -702,8 +702,9 @@ a.item-title:hover,
 /* ── Result media-type filter ─────────────────────────────────────── */
 .type-filters {
   display: flex; gap: 16px; flex-wrap: wrap;
-  margin: 6px 0 14px; font-size: 12px; letter-spacing: 0.02em;
+  margin: 8px 0 0; font-size: 12px; letter-spacing: 0.02em;
 }
+.type-filters[hidden] { display: none; }
 .type-filters label {
   display: inline-flex; align-items: center; gap: 6px;
   color: var(--muted); cursor: pointer; user-select: none;
