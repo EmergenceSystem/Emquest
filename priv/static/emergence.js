@@ -324,6 +324,7 @@ function buildCard(item, sid, pos) {
         }
     } else if (item.media_type === 'audio') {
         li.classList.add('item-card--media');
+        initAudioPlayer(li);
     } else if (item.url) {
         const url = safeUrl(item.url);
         if (url) {
@@ -424,8 +425,15 @@ function buildMediaBody(item) {
                         ${foot}
                     </div>
                 </div>
-                ${src ? `<audio class="media-audio-el" controls preload="none"
-                     src="${escAttr(src)}"></audio>` : ''}
+                ${src ? `<div class="aplayer">
+                    <button class="aplayer-play" type="button" aria-label="Play / pause">
+                        <svg class="ic-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg>
+                        <svg class="ic-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    </button>
+                    <div class="aplayer-bar"><div class="aplayer-fill"></div></div>
+                    <span class="aplayer-time">0:00</span>
+                    <audio class="aplayer-audio" preload="none" src="${escAttr(src)}"></audio>
+                </div>` : ''}
             </div>`;
     }
 
@@ -464,6 +472,39 @@ function fmtDur(s) {
 }
 
 let _lightbox = null;
+// Custom green audio player (native <audio> hidden, styled controls).
+function initAudioPlayer(root) {
+  const el    = root.querySelector('.aplayer');
+  const audio = root.querySelector('audio.aplayer-audio');
+  const btn   = root.querySelector('.aplayer-play');
+  const bar   = root.querySelector('.aplayer-bar');
+  const fill  = root.querySelector('.aplayer-fill');
+  const tEl   = root.querySelector('.aplayer-time');
+  if (!el || !audio || !btn) return;
+  const fmt = s => { s = Math.floor(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (audio.paused) audio.play(); else audio.pause();
+  });
+  audio.addEventListener('play',  () => el.classList.add('playing'));
+  audio.addEventListener('pause', () => el.classList.remove('playing'));
+  audio.addEventListener('ended', () => el.classList.remove('playing'));
+  audio.addEventListener('loadedmetadata', () => {
+    if (tEl) tEl.textContent = '0:00 / ' + fmt(audio.duration);
+  });
+  audio.addEventListener('timeupdate', () => {
+    const d = audio.duration || 0, c = audio.currentTime || 0;
+    if (fill) fill.style.width = d ? (c / d * 100) + '%' : '0%';
+    if (tEl)  tEl.textContent  = fmt(c) + (d ? ' / ' + fmt(d) : '');
+  });
+  if (bar) bar.addEventListener('click', e => {
+    e.stopPropagation();
+    const r = bar.getBoundingClientRect();
+    const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    if (audio.duration) audio.currentTime = p * audio.duration;
+  });
+}
+
 function openLightbox(src) {
     if (!_lightbox) {
         _lightbox = document.createElement('div');
