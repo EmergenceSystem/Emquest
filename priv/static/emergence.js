@@ -147,7 +147,10 @@ async function submitQuery() {
     /* Pre-render layout: user prompt echo + progress log above results */
     results.innerHTML =
         userPromptHtml(query) + `
-        <div class="progress-log" id="progress-log"></div>
+        <div class="progress-log" id="progress-log">
+            <div class="pbar"><div class="pbar-fill" id="pbar-fill"></div></div>
+            <span class="pbar-count" id="pbar-count">0 results</span>
+        </div>
         <ul class="items-list" id="results-list"></ul>
     `;
 
@@ -155,6 +158,7 @@ async function submitQuery() {
     initTypeFilters();
     const tfbar = document.getElementById('type-filters');
     if (tfbar) tfbar.hidden = false;
+    startProgress();
 
     try {
         const resp = await fetch('/query', {
@@ -193,6 +197,7 @@ async function submitQuery() {
         btn.classList.remove('loading');
         btn.disabled = false;
         /* Fallback: remove progress log if reorder never arrived */
+        finishProgress();
         const log = document.getElementById('progress-log');
         if (log) {
             setTimeout(() => {
@@ -211,16 +216,9 @@ function handleEvent(event) {
     switch (event.type) {
 
         /* ── Progress line ─────────────────────────────────────── */
-        case 'status': {
-            const log = document.getElementById('progress-log');
-            if (!log) return;
-            const line = document.createElement('div');
-            line.className = 'progress-line';
-            line.innerHTML = `<span class="progress-arrow">›</span>${escHtml(event.message)}`;
-            log.appendChild(line);
-            line.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        case 'status':
+            /* progress is shown as a bar + live count, not per-call lines */
             break;
-        }
 
         /* ── Stream one result card immediately ────────────────── */
         case 'item': {
@@ -230,6 +228,7 @@ function handleEvent(event) {
             list.appendChild(card);
             streamCards.set(event.sid, card);
             applyTypeFilter();
+            bumpCount();
             break;
         }
 
@@ -268,7 +267,10 @@ function handleEvent(event) {
                 list.appendChild(card); /* move to end in ranked order */
             });
 
-            /* Hide progress log now that ranking is done → cards float up */
+            /* Finalise the progress bar + count, then fade it out */
+            finishProgress();
+            _resultCount = sids.length;
+            updateCount();
             const log = document.getElementById('progress-log');
             if (log) {
                 setTimeout(() => {
@@ -535,6 +537,29 @@ function initAudioPlayer(root) {
 }
 
 // Media-type result filter (text / image / audio / video checkboxes).
+// Query progress: a bar that fills over the ~8s collect deadline + a live
+// result count that grows as items stream in.
+let _resultCount = 0;
+const PROGRESS_MS = 8000;
+function startProgress() {
+  _resultCount = 0;
+  updateCount();
+  /* the fill is a fresh element each search; its CSS animation runs on its own */
+}
+function bumpCount() { _resultCount++; updateCount(); }
+function updateCount() {
+  const c = document.getElementById('pbar-count');
+  if (c) c.textContent = _resultCount + (_resultCount === 1 ? ' result' : ' results');
+}
+function finishProgress() {
+  const fill = document.getElementById('pbar-fill');
+  if (fill) {
+    fill.style.animation = 'none';
+    fill.style.transition = 'width 0.35s ease';
+    fill.style.width = '100%';
+  }
+}
+
 let _typeFiltersInit = false;
 function initTypeFilters() {
   if (_typeFiltersInit) return;

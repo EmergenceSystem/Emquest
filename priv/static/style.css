@@ -714,3 +714,14 @@ a.item-title:hover,
 .type-filters input { accent-color: var(--green); cursor: pointer; }
 .type-filters label:has(input:checked) { color: rgba(0, 220, 100, 0.85); }
 .item-card.type-hidden { display: none !important; }
+
+/* ── Query progress bar + live count ──────────────────────────────── */
+.progress-log { display: flex; align-items: center; gap: 12px; margin: 10px 0 16px; background: none; border: none; padding: 0; min-height: 0; }
+.pbar { flex: 1 1 auto; height: 4px; border-radius: 3px; overflow: hidden;
+        background: rgba(0, 220, 100, 0.12); }
+.pbar-fill { height: 100%; width: 0%; border-radius: 3px;
+             background: var(--green); box-shadow: 0 0 8px rgba(0, 220, 100, 0.6);
+             animation: pbar-grow 8s cubic-bezier(0.1,0.7,0.2,1) forwards; }
+@keyframes pbar-grow { from { width: 0%; } to { width: 92%; } }
+.pbar-count { flex: 0 0 auto; font-size: 12px; color: var(--muted);
+              font-variant-numeric: tabular-nums; }
