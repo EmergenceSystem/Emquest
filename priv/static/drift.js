@@ -311,6 +311,141 @@ async function loadBatch() {
 /* ================================================================== */
 /* Card creation                                                      */
 /* ================================================================== */
+/* ── Media card rendering (shared look with the search page) ─────── */
+function safeUrl(s) {
+    if (!s) return null;
+    const t = String(s).trim();
+    return /^https?:\/\//i.test(t) ? t : null;
+}
+function mediaFooter(item) {
+    const bits = [];
+    if (item.source)  bits.push(escHtml(item.source));
+    if (item.license) bits.push(escHtml(item.license));
+    if (item.author)  bits.push(escHtml(item.author));
+    return bits.length ? `<span class="media-license">${bits.join(' · ')}</span>` : '';
+}
+function fmtDur(s) {
+    s = parseInt(s, 10) || 0;
+    const m = Math.floor(s / 60), ss = String(s % 60).padStart(2, '0');
+    return `${m}:${ss}`;
+}
+function buildMediaBody(item) {
+    const t     = item.media_type;
+    const title = (item.label && item.label !== 'Result') ? escHtml(item.label) : '';
+    const foot  = mediaFooter(item);
+    const thumb = item.thumbnail ? safeUrl(item.thumbnail) : '';
+
+    if (t === 'audio') {
+        const src = safeUrl(item.media_url) || '';
+        return `
+            <div class="media-card media-audio">
+                <div class="media-audio-head">
+                    ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
+                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
+                         onerror="this.remove()">` : ''}
+                    <div class="media-meta">
+                        ${title ? `<span class="item-title">${title}</span>` : ''}
+                        ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                        ${foot}
+                    </div>
+                </div>
+                ${src ? `<div class="aplayer">
+                    <button class="aplayer-play" type="button" aria-label="Play / pause">
+                        <svg class="ic-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg>
+                        <svg class="ic-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                    </button>
+                    <div class="aplayer-bar"><div class="aplayer-fill"></div></div>
+                    <span class="aplayer-time">0:00</span>
+                    <button class="aplayer-vol-btn" type="button" aria-label="Mute">
+                        <svg class="ic-vol" viewBox="0 0 24 24"><polygon points="4 9 4 15 8 15 13 20 13 4 8 9"/><path d="M16 8.5a4 4 0 0 1 0 7"/></svg>
+                        <svg class="ic-mute" viewBox="0 0 24 24"><polygon points="4 9 4 15 8 15 13 20 13 4 8 9"/><line x1="16" y1="9" x2="21" y2="15"/><line x1="21" y1="9" x2="16" y2="15"/></svg>
+                    </button>
+                    <input class="aplayer-vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+                    <a class="aplayer-dl" href="${escAttr(src)}" target="_blank" rel="noopener" aria-label="Open URL" title="Open URL">
+                        <svg viewBox="0 0 24 24"><path d="M14 4h6v6"/><line x1="20" y1="4" x2="10" y2="14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>
+                    </a>
+                    <audio class="aplayer-audio" preload="none" src="${escAttr(src)}"></audio>
+                </div>` : ''}
+            </div>`;
+    }
+
+    const durBadge = (t === 'video' && item.duration)
+        ? `<span class="media-duration">${escHtml(fmtDur(item.duration))}</span>` : '';
+    const play     = (t === 'video') ? `<span class="media-play">▶</span>` : '';
+    const thumbHtml = thumb
+        ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
+             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
+             onerror="this.classList.add('media-thumb--broken')">`
+        : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
+    return `
+        <div class="media-card media-${escAttr(t)}">
+            <div class="media-thumb-wrap">${thumbHtml}${play}${durBadge}</div>
+            <div class="media-meta">
+                ${title ? `<span class="item-title">${title}</span>` : ''}
+                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${foot}
+            </div>
+        </div>`;
+}
+let _lightbox = null;
+function openLightbox(src) {
+    if (!_lightbox) {
+        _lightbox = document.createElement('div');
+        _lightbox.id = 'media-lightbox';
+        _lightbox.className = 'lightbox';
+        _lightbox.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">';
+        _lightbox.addEventListener('click', () => _lightbox.classList.remove('open'));
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && _lightbox) _lightbox.classList.remove('open');
+        });
+        document.body.appendChild(_lightbox);
+    }
+    _lightbox.querySelector('img').src = src;
+    _lightbox.classList.add('open');
+}
+function initAudioPlayer(root) {
+  const el    = root.querySelector('.aplayer');
+  const audio = root.querySelector('audio.aplayer-audio');
+  const btn   = root.querySelector('.aplayer-play');
+  const bar   = root.querySelector('.aplayer-bar');
+  const fill  = root.querySelector('.aplayer-fill');
+  const tEl   = root.querySelector('.aplayer-time');
+  if (!el || !audio || !btn) return;
+  const fmt = s => { s = Math.floor(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  btn.addEventListener('click', e => { e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
+  audio.addEventListener('play',  () => el.classList.add('playing'));
+  audio.addEventListener('pause', () => el.classList.remove('playing'));
+  audio.addEventListener('ended', () => el.classList.remove('playing'));
+  audio.addEventListener('loadedmetadata', () => { if (tEl) tEl.textContent = '0:00 / ' + fmt(audio.duration); });
+  audio.addEventListener('timeupdate', () => {
+    const d = audio.duration || 0, c = audio.currentTime || 0;
+    if (fill) fill.style.width = d ? (c / d * 100) + '%' : '0%';
+    if (tEl)  tEl.textContent  = fmt(c) + (d ? ' / ' + fmt(d) : '');
+  });
+  if (bar) bar.addEventListener('click', e => {
+    e.stopPropagation();
+    const r = bar.getBoundingClientRect();
+    const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    if (audio.duration) audio.currentTime = p * audio.duration;
+  });
+  const volBtn = root.querySelector('.aplayer-vol-btn');
+  const vol    = root.querySelector('.aplayer-vol');
+  const dl     = root.querySelector('.aplayer-dl');
+  if (vol) vol.addEventListener('input', e => {
+    e.stopPropagation();
+    audio.volume = parseFloat(vol.value);
+    audio.muted = audio.volume === 0;
+    el.classList.toggle('muted', audio.muted);
+  });
+  if (volBtn) volBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    audio.muted = !audio.muted;
+    el.classList.toggle('muted', audio.muted);
+    if (vol) vol.value = audio.muted ? 0 : (audio.volume || 1);
+  });
+  if (dl) dl.addEventListener('click', e => e.stopPropagation());
+}
+
 function appendCard(item, topicIndex) {
     const feed = document.getElementById('drift-feed');
     if (!feed) return;
@@ -328,14 +463,41 @@ function appendCard(item, topicIndex) {
         }
     }
 
-    const safeUrl = escAttr(item.url);
+    if (item.media_type) {
+        /* Media item — same media card as the search page */
+        card.classList.add('drift-card--media');
+        card.innerHTML =
+            `<div class="card-topic-tag">${escHtml(TOPICS[topicIndex])}</div>` +
+            buildMediaBody(item);
+        if (item.media_type === 'audio') {
+            initAudioPlayer(card);
+        } else if (item.media_type === 'image') {
+            card.addEventListener('click', e => {
+                if (e.target.closest('a')) return;
+                const full = safeUrl(item.media_url) || safeUrl(item.thumbnail);
+                if (full) openLightbox(full);
+            });
+        } else if (item.media_type === 'video') {
+            card.addEventListener('click', e => {
+                if (e.target.closest('a, audio')) return;
+                const u = safeUrl(item.url) || safeUrl(item.media_url);
+                if (u) window.open(u, '_blank', 'noopener');
+            });
+        }
+        feed.appendChild(card);
+        totalItems++;
+        updateFooter();
+        return;
+    }
+
+    const previewUrl = escAttr(item.url);
     const label   = item.label && item.label !== 'Result' ? item.label : hostnameOf(item.url);
 
     card.innerHTML = `
         <div class="card-topic-tag">${escHtml(TOPICS[topicIndex])}</div>
         <div class="card-title">${escHtml(label)}</div>
         <div class="card-url">${escHtml(item.url)}</div>
-        <div class="card-preview loading" data-preview-url="${safeUrl}"></div>
+        <div class="card-preview loading" data-preview-url="${previewUrl}"></div>
         <button class="card-open-btn" aria-label="Open link" tabindex="0">↗</button>
     `;
 
