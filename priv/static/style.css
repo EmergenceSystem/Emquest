@@ -678,3 +678,23 @@ a.item-title:hover,
   flex: 0 0 auto; min-width: 62px; text-align: right;
   font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
+
+/* audio player: volume + download */
+.aplayer-vol-btn {
+  flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--green); cursor: pointer;
+}
+.aplayer-vol-btn svg, .aplayer-dl svg {
+  width: 16px; height: 16px; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.aplayer-vol-btn .ic-mute { display: none; }
+.aplayer.muted .ic-vol  { display: none; }
+.aplayer.muted .ic-mute { display: inline; }
+.aplayer-vol { flex: 0 0 auto; width: 64px; accent-color: var(--green); cursor: pointer; }
+.aplayer-dl {
+  flex: 0 0 auto; display: flex; align-items: center; color: var(--green);
+  text-decoration: none; opacity: 0.8; transition: opacity 0.2s var(--ease), filter 0.2s var(--ease);
+}
+.aplayer-dl:hover { opacity: 1; filter: drop-shadow(0 0 6px rgba(0, 220, 100, 0.6)); }
