@@ -437,8 +437,8 @@ function buildMediaBody(item) {
                         <svg class="ic-mute" viewBox="0 0 24 24"><polygon points="4 9 4 15 8 15 13 20 13 4 8 9"/><line x1="16" y1="9" x2="21" y2="15"/><line x1="21" y1="9" x2="16" y2="15"/></svg>
                     </button>
                     <input class="aplayer-vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
-                    <a class="aplayer-dl" href="${escAttr(src)}" download target="_blank" rel="noopener" aria-label="Download" title="Download file">
-                        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><polyline points="7 11 12 16 17 11"/><line x1="5" y1="20" x2="19" y2="20"/></svg>
+                    <a class="aplayer-dl" href="${escAttr(src)}" target="_blank" rel="noopener" aria-label="Open URL" title="Open URL">
+                        <svg viewBox="0 0 24 24"><path d="M14 4h6v6"/><line x1="20" y1="4" x2="10" y2="14"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>
                     </a>
                     <audio class="aplayer-audio" preload="none" src="${escAttr(src)}"></audio>
                 </div>` : ''}
