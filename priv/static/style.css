@@ -698,3 +698,18 @@ a.item-title:hover,
   text-decoration: none; opacity: 0.8; transition: opacity 0.2s var(--ease), filter 0.2s var(--ease);
 }
 .aplayer-dl:hover { opacity: 1; filter: drop-shadow(0 0 6px rgba(0, 220, 100, 0.6)); }
+
+/* ── Result media-type filter ─────────────────────────────────────── */
+.type-filters {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  margin: 6px 0 14px; font-size: 12px; letter-spacing: 0.02em;
+}
+.type-filters label {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--muted); cursor: pointer; user-select: none;
+  text-transform: uppercase; transition: color 0.15s var(--ease);
+}
+.type-filters label:hover { color: rgba(0, 220, 100, 0.85); }
+.type-filters input { accent-color: var(--green); cursor: pointer; }
+.type-filters label:has(input:checked) { color: rgba(0, 220, 100, 0.85); }
+.item-card.type-hidden { display: none !important; }

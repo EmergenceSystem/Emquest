@@ -148,10 +148,17 @@ async function submitQuery() {
     results.innerHTML =
         userPromptHtml(query) + `
         <div class="progress-log" id="progress-log"></div>
+        <div class="type-filters" id="type-filters">
+            <label><input type="checkbox" value="text" checked> text</label>
+            <label><input type="checkbox" value="image" checked> image</label>
+            <label><input type="checkbox" value="audio" checked> audio</label>
+            <label><input type="checkbox" value="video" checked> video</label>
+        </div>
         <ul class="items-list" id="results-list"></ul>
     `;
 
     hideAnswerPanel();
+    initTypeFilters();
 
     try {
         const resp = await fetch('/query', {
@@ -226,6 +233,7 @@ function handleEvent(event) {
             const card = buildCard(event.item, event.sid, streamCards.size);
             list.appendChild(card);
             streamCards.set(event.sid, card);
+            applyTypeFilter();
             break;
         }
 
@@ -299,6 +307,7 @@ function buildCard(item, sid, pos) {
     const li = document.createElement('li');
     li.className = `item-card score-${item.score ?? 0}`;
     li.dataset.sid = sid;
+    li.dataset.mtype = item.media_type || 'text';
     li.style.animationDelay = `${Math.min(pos * 50, 400)}ms`;
 
     li.innerHTML = buildCardBody(item, pos);
@@ -527,6 +536,23 @@ function initAudioPlayer(root) {
     if (vol) vol.value = audio.muted ? 0 : (audio.volume || 1);
   });
   if (dl) dl.addEventListener('click', e => e.stopPropagation());
+}
+
+// Media-type result filter (text / image / audio / video checkboxes).
+function initTypeFilters() {
+  const tf = document.getElementById('type-filters');
+  if (tf) tf.addEventListener('change', applyTypeFilter);
+}
+function applyTypeFilter() {
+  const tf   = document.getElementById('type-filters');
+  const list = document.getElementById('results-list');
+  if (!tf || !list) return;
+  const checked = [...tf.querySelectorAll('input:checked')].map(c => c.value);
+  const showAll = checked.length === 0;
+  list.querySelectorAll('li.item-card').forEach(li => {
+    const t = li.dataset.mtype || 'text';
+    li.classList.toggle('type-hidden', !showAll && !checked.includes(t));
+  });
 }
 
 function openLightbox(src) {
