@@ -584,3 +584,5 @@ a.item-title:hover,
 .raster-badge { color: var(--green); letter-spacing: 0.08em; font-weight: 500; }
 .raster-id { color: var(--text-secondary); }
 .raster-stats { color: var(--blue-dim); margin-left: auto; }
+
+.meta-status.rec { color: rgba(0,220,100,0.95); }

@@ -569,25 +569,31 @@ function showRaster(card) {
 
   let recorder = null, chunks = [], stream = null, recording = false;
   let vadRAF = null, vadCtx = null;
-  const setStatus = m => { if (status) status.textContent = m || ''; };
+  const setStatus = (m, rec) => {
+    if (!status) return;
+    status.textContent = m || '';
+    status.classList.toggle('rec', !!rec);
+  };
 
   function stopVad() {
     if (vadRAF) { cancelAnimationFrame(vadRAF); vadRAF = null; }
     if (vadCtx) { try { vadCtx.close(); } catch (_) {} vadCtx = null; }
   }
 
-  // Auto-stop: once speech is heard, stop after ~1.2s of continuous silence
-  // (also a hard 15s cap). Manual click on the mic still stops immediately.
+  // Auto-stop: calibrate ambient noise for the first ~350 ms, then once speech
+  // is heard, stop after ~1.2 s of continuous silence (hard 15 s cap). A manual
+  // click on the mic still stops immediately.
   function startVad(mediaStream) {
     const AC = window.AudioContext || window.webkitAudioContext;
     vadCtx = new AC();
+    if (vadCtx.state === 'suspended') { try { vadCtx.resume(); } catch (_) {} }
     const src = vadCtx.createMediaStreamSource(mediaStream);
     const an = vadCtx.createAnalyser();
     an.fftSize = 1024;
     src.connect(an);
     const buf = new Float32Array(an.fftSize);
-    const SPEECH = 0.02, SILENCE = 0.015, SILENCE_MS = 1200, MAX_MS = 15000;
-    let spoke = false, silenceStart = 0;
+    const SILENCE_MS = 1200, MAX_MS = 15000, MIN_MS = 700, CAL_MS = 350;
+    let noise = 0.005, calN = 0, spoke = false, silenceStart = 0;
     const t0 = performance.now();
     const tick = () => {
       if (!recording || !recorder) return;
@@ -595,13 +601,18 @@ function showRaster(card) {
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
-      const now = performance.now();
-      if (rms > SPEECH) { spoke = true; silenceStart = 0; }
-      else if (spoke && rms < SILENCE) {
+      const now = performance.now(), elapsed = now - t0;
+      if (elapsed < CAL_MS) { noise = (noise * calN + rms) / (calN + 1); calN++; }
+      const speechThr  = Math.max(0.02,  noise * 3);
+      const silenceThr = Math.max(0.012, noise * 2);
+      if (rms > speechThr) {
+        spoke = true; silenceStart = 0;
+        setStatus('recording — pause to send', true);
+      } else if (spoke && rms < silenceThr) {
         if (!silenceStart) silenceStart = now;
-        else if (now - silenceStart > SILENCE_MS) { recorder.stop(); return; }
+        else if (now - silenceStart > SILENCE_MS && elapsed > MIN_MS) { recorder.stop(); return; }
       } else if (spoke) { silenceStart = 0; }
-      if (now - t0 > MAX_MS) { recorder.stop(); return; }
+      if (elapsed > MAX_MS) { recorder.stop(); return; }
       vadRAF = requestAnimationFrame(tick);
     };
     vadRAF = requestAnimationFrame(tick);
@@ -619,7 +630,7 @@ function showRaster(card) {
       recording = false; micBtn.classList.remove('recording');
       stopVad();
       stream.getTracks().forEach(t => t.stop());
-      setStatus('transcribing...');
+      setStatus('transcribing...', true);
       try {
         const wav = await blobToWav16k(new Blob(chunks));
         const fd = new FormData();
@@ -637,7 +648,7 @@ function showRaster(card) {
     };
     recorder.start();
     recording = true; micBtn.classList.add('recording');
-    setStatus('listening... (auto-stops on silence, or click mic)');
+    setStatus('listening — speak, then pause to send', true);
     startVad(stream);
   });
 
