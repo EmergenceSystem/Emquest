@@ -319,6 +319,14 @@ function appendCard(item, topicIndex) {
     card.className = `drift-card active-topic-${topicIndex % 5}`;
     card.style.animationDelay = `${Math.min((totalItems % 10) * 40, 300)}ms`;
     card.dataset.url = item.url;
+    card.dataset.mtype = item.media_type || 'text';
+    {
+        const bar = document.getElementById('drift-typebar');
+        if (bar) {
+            const checked = [...bar.querySelectorAll('input:checked')].map(c => c.value);
+            if (checked.length && !checked.includes(card.dataset.mtype)) card.classList.add('type-hidden');
+        }
+    }
 
     const safeUrl = escAttr(item.url);
     const label   = item.label && item.label !== 'Result' ? item.label : hostnameOf(item.url);
@@ -509,6 +517,56 @@ function hostnameOf(url) {
 /* ================================================================== */
 /* Boot                                                               */
 /* ================================================================== */
+/* ── Media-type filter (checkboxes) + IndexedDB persistence ─────── */
+const _MT_DB = 'emergence', _MT_STORE = 'prefs', _MT_KEY = 'mediaTypes';
+function _mtDbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(_MT_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(_MT_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function applyDriftFilter() {
+  const bar = document.getElementById('drift-typebar');
+  if (!bar) return;
+  const checked = [...bar.querySelectorAll('input:checked')].map(c => c.value);
+  const showAll = checked.length === 0;
+  document.querySelectorAll('#drift-feed .drift-card').forEach(card => {
+    const t = card.dataset.mtype || 'text';
+    card.classList.toggle('type-hidden', !showAll && !checked.includes(t));
+  });
+}
+async function persistDriftTypes() {
+  try {
+    const bar = document.getElementById('drift-typebar');
+    if (!bar) return;
+    const vals = [...bar.querySelectorAll('input')].filter(c => c.checked).map(c => c.value);
+    const db = await _mtDbOpen();
+    await new Promise(res => {
+      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(vals, _MT_KEY);
+      req.onsuccess = () => res(); req.onerror = () => res();
+    });
+  } catch (_) {}
+}
+async function restoreDriftTypes() {
+  try {
+    const db = await _mtDbOpen();
+    const vals = await new Promise(res => {
+      const req = db.transaction(_MT_STORE, 'readonly').objectStore(_MT_STORE).get(_MT_KEY);
+      req.onsuccess = () => res(req.result); req.onerror = () => res(undefined);
+    });
+    const bar = document.getElementById('drift-typebar');
+    if (!bar || !Array.isArray(vals)) return;
+    bar.querySelectorAll('input').forEach(c => { c.checked = vals.includes(c.value); });
+    applyDriftFilter();
+  } catch (_) {}
+}
+function initDriftFilter() {
+  const bar = document.getElementById('drift-typebar');
+  if (bar) bar.addEventListener('change', () => { applyDriftFilter(); persistDriftTypes(); });
+}
+
 initPreviewObserver();
 initSentinelObserver();
 initKeyboard();
@@ -516,5 +574,7 @@ initDrag();
 (async () => {
     await loadTopics();
     buildTopics();
+    initDriftFilter();
+    await restoreDriftTypes();
     if (TOPICS.length) loadBatch();
 })();

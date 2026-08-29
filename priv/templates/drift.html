@@ -234,6 +234,24 @@
             transition: color 0.15s, border-color 0.15s;
         }
         .suggest-chip:hover { color: var(--green); border-color: var(--border-hi); }
+
+        /* ── Media-type filter bar ────────────────────────────────── */
+        .drift-typebar {
+            position: sticky; top: 56px; z-index: 150;
+            background: rgba(6,10,8,0.92);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+            display: flex; gap: 16px; align-items: center;
+            padding: 8px 2rem; font-size: 0.7rem; letter-spacing: 0.05em;
+        }
+        .drift-typebar label {
+            display: inline-flex; align-items: center; gap: 6px;
+            color: var(--muted); cursor: pointer; text-transform: uppercase;
+            user-select: none; transition: color 0.15s;
+        }
+        .drift-typebar label:hover { color: rgba(0,220,100,0.85); }
+        .drift-typebar input { accent-color: var(--green); cursor: pointer; }
+        .drift-card.type-hidden { display: none !important; }
     </style>
 </head>
 <body>
@@ -249,6 +267,13 @@
             <span id="clock" class="drift-clock"></span>
         </div>
     </header>
+
+    <div class="drift-typebar" id="drift-typebar">
+        <label><input type="checkbox" value="text" checked> text</label>
+        <label><input type="checkbox" value="image" checked> image</label>
+        <label><input type="checkbox" value="audio" checked> audio</label>
+        <label><input type="checkbox" value="video" checked> video</label>
+    </div>
 
     <main class="drift-feed" id="drift-feed"></main>
 
@@ -266,6 +291,6 @@
         <span id="footer-count" class="footer-info">0 items</span>
     </footer>
 
-    <script src="/static/drift.js?v=1"></script>
+    <script src="/static/drift.js?v=2"></script>
 </body>
 </html>
