@@ -9,13 +9,53 @@
 /* ================================================================== */
 /* Config                                                             */
 /* ================================================================== */
-const TOPICS = [
+const DEFAULT_TOPICS = [
     'Erlang',
     'Claude AI',
     'distributed systems',
     'functional programming',
     'software architecture',
 ];
+const SUGGESTED_TOPICS = [
+    'Rust', 'Linux', 'space', 'science', 'AI safety', 'cryptography',
+    'philosophy', 'music', 'design', 'mathematics', 'biology', 'economics',
+    'privacy', 'open source', 'robotics', 'climate', 'history', 'security',
+];
+let TOPICS = DEFAULT_TOPICS.slice();
+
+/* ── IndexedDB: persist the user's chosen themes ─────────────────── */
+const IDB_NAME = 'emdrift', IDB_STORE = 'prefs', IDB_KEY = 'topics';
+function idbOpen() {
+    return new Promise((resolve, reject) => {
+        const r = indexedDB.open(IDB_NAME, 1);
+        r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+        r.onsuccess = () => resolve(r.result);
+        r.onerror   = () => reject(r.error);
+    });
+}
+async function loadTopics() {
+    try {
+        const db = await idbOpen();
+        const val = await new Promise(res => {
+            const req = db.transaction(IDB_STORE, 'readonly')
+                          .objectStore(IDB_STORE).get(IDB_KEY);
+            req.onsuccess = () => res(req.result);
+            req.onerror   = () => res(undefined);
+        });
+        if (Array.isArray(val) && val.length) TOPICS = val;
+    } catch (_) { /* IndexedDB unavailable → keep defaults */ }
+}
+async function persistTopics() {
+    try {
+        const db = await idbOpen();
+        await new Promise(res => {
+            const req = db.transaction(IDB_STORE, 'readwrite')
+                          .objectStore(IDB_STORE).put(TOPICS.slice(), IDB_KEY);
+            req.onsuccess = () => res();
+            req.onerror   = () => res();
+        });
+    } catch (_) {}
+}
 
 /** Trigger next batch when sentinel is within this many px of viewport */
 const LOAD_THRESHOLD = '200px';
@@ -98,13 +138,100 @@ window.addEventListener('scroll', () => {
 function buildTopics() {
     const nav = document.getElementById('drift-topics');
     if (!nav) return;
+    nav.innerHTML = '';
+    if (activeTopic >= TOPICS.length) activeTopic = 0;
     TOPICS.forEach((label, i) => {
-        const chip = document.createElement('button');
-        chip.className = 'topic-chip' + (i === 0 ? ' active' : '');
-        chip.textContent = label;
-        chip.addEventListener('click', () => selectTopic(i));
+        const chip = document.createElement('div');
+        chip.className = 'topic-chip' + (i === activeTopic ? ' active' : '');
+        const name = document.createElement('span');
+        name.className = 'chip-label';
+        name.textContent = label;
+        name.addEventListener('click', () => selectTopic(i));
+        const x = document.createElement('button');
+        x.className = 'chip-x';
+        x.type = 'button';
+        x.textContent = '\u00d7';
+        x.title = 'Remove theme';
+        x.addEventListener('click', (e) => { e.stopPropagation(); removeTopic(i); });
+        chip.appendChild(name);
+        chip.appendChild(x);
         nav.appendChild(chip);
     });
+    const add = document.createElement('button');
+    add.className = 'topic-add';
+    add.type = 'button';
+    add.textContent = '+';
+    add.title = 'Add a theme';
+    add.addEventListener('click', (e) => { e.stopPropagation(); toggleAddPanel(add); });
+    nav.appendChild(add);
+}
+
+function removeTopic(i) {
+    TOPICS.splice(i, 1);
+    if (activeTopic >= TOPICS.length) activeTopic = Math.max(0, TOPICS.length - 1);
+    persistTopics();
+    buildTopics();
+    clearFeed();
+    if (TOPICS.length) loadBatch();
+}
+
+function addTopic(label) {
+    const t = (label || '').trim();
+    if (!t) return;
+    if (TOPICS.some(x => x.toLowerCase() === t.toLowerCase())) { closeAddPanel(); return; }
+    TOPICS.push(t);
+    persistTopics();
+    activeTopic = TOPICS.length - 1;
+    buildTopics();
+    clearFeed();
+    loadBatch();
+    closeAddPanel();
+}
+
+function toggleAddPanel(anchorEl) {
+    if (document.getElementById('topic-panel')) { closeAddPanel(); return; }
+    const panel = document.createElement('div');
+    panel.id = 'topic-panel';
+    panel.className = 'topic-panel';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'add a theme\u2026';
+    input.className = 'topic-panel-input';
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') addTopic(input.value);
+        else if (e.key === 'Escape') closeAddPanel();
+    });
+    panel.appendChild(input);
+    const sugg = document.createElement('div');
+    sugg.className = 'topic-suggest';
+    SUGGESTED_TOPICS
+        .filter(s => !TOPICS.some(x => x.toLowerCase() === s.toLowerCase()))
+        .forEach(s => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'suggest-chip';
+            b.textContent = s;
+            b.addEventListener('click', () => addTopic(s));
+            sugg.appendChild(b);
+        });
+    panel.appendChild(sugg);
+    document.body.appendChild(panel);
+    const r = anchorEl.getBoundingClientRect();
+    panel.style.top  = (r.bottom + 6) + 'px';
+    panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 296)) + 'px';
+    input.focus();
+    setTimeout(() => document.addEventListener('click', outsideAddPanel), 0);
+}
+function outsideAddPanel(e) {
+    const panel = document.getElementById('topic-panel');
+    if (panel && !panel.contains(e.target) && !e.target.classList.contains('topic-add')) {
+        closeAddPanel();
+    }
+}
+function closeAddPanel() {
+    const panel = document.getElementById('topic-panel');
+    if (panel) panel.remove();
+    document.removeEventListener('click', outsideAddPanel);
 }
 
 function selectTopic(index) {
@@ -135,7 +262,7 @@ function updateFooter() {
 /* Batch loading via /query SSE                                       */
 /* ================================================================== */
 async function loadBatch() {
-    if (loading) return;
+    if (loading || !TOPICS.length) return;
     loading = true;
 
     const sentinel = document.getElementById('drift-sentinel');
@@ -382,9 +509,12 @@ function hostnameOf(url) {
 /* ================================================================== */
 /* Boot                                                               */
 /* ================================================================== */
-buildTopics();
 initPreviewObserver();
 initSentinelObserver();
 initKeyboard();
 initDrag();
-loadBatch();
+(async () => {
+    await loadTopics();
+    buildTopics();
+    if (TOPICS.length) loadBatch();
+})();
