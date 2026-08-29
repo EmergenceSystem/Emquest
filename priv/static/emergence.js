@@ -550,11 +550,48 @@ function finishProgress() {
   }
 }
 
+/* Persist the media-type filter choices in IndexedDB (db emergence/prefs). */
+const _MT_DB = 'emergence', _MT_STORE = 'prefs', _MT_KEY = 'mediaTypes';
+function _mtDbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(_MT_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(_MT_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function persistMediaTypes() {
+  try {
+    const tf = document.getElementById('type-filters');
+    if (!tf) return;
+    const vals = [...tf.querySelectorAll('input')].filter(c => c.checked).map(c => c.value);
+    const db = await _mtDbOpen();
+    await new Promise(res => {
+      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(vals, _MT_KEY);
+      req.onsuccess = () => res(); req.onerror = () => res();
+    });
+  } catch (_) {}
+}
+async function restoreMediaTypes() {
+  try {
+    const db = await _mtDbOpen();
+    const vals = await new Promise(res => {
+      const req = db.transaction(_MT_STORE, 'readonly').objectStore(_MT_STORE).get(_MT_KEY);
+      req.onsuccess = () => res(req.result); req.onerror = () => res(undefined);
+    });
+    if (!Array.isArray(vals)) return;
+    const tf = document.getElementById('type-filters');
+    if (!tf) return;
+    tf.querySelectorAll('input').forEach(c => { c.checked = vals.includes(c.value); });
+    applyTypeFilter();
+  } catch (_) {}
+}
+
 let _typeFiltersInit = false;
 function initTypeFilters() {
   if (_typeFiltersInit) return;
   const tf = document.getElementById('type-filters');
-  if (tf) { tf.addEventListener('change', applyTypeFilter); _typeFiltersInit = true; }
+  if (tf) { tf.addEventListener('change', () => { applyTypeFilter(); persistMediaTypes(); }); _typeFiltersInit = true; }
 }
 function applyTypeFilter() {
   const tf   = document.getElementById('type-filters');
@@ -904,3 +941,6 @@ function showRaster(card) {
     return new Blob([view], { type: 'audio/wav' });
   }
 })();
+
+/* restore saved media-type filter on page load */
+restoreMediaTypes();
