@@ -725,3 +725,7 @@ a.item-title:hover,
 @keyframes pbar-grow { from { width: 0%; } to { width: 92%; } }
 .pbar-count { flex: 0 0 auto; font-size: 12px; color: var(--muted);
               font-variant-numeric: tabular-nums; }
+
+/* result count on the media-type filter line */
+.tf-count { margin-left: auto; color: var(--green); font-size: 12px;
+            font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }

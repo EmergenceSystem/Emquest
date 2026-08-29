@@ -149,7 +149,6 @@ async function submitQuery() {
         userPromptHtml(query) + `
         <div class="progress-log" id="progress-log">
             <div class="pbar"><div class="pbar-fill" id="pbar-fill"></div></div>
-            <span class="pbar-count" id="pbar-count">0 results</span>
         </div>
         <ul class="items-list" id="results-list"></ul>
     `;
@@ -228,7 +227,6 @@ function handleEvent(event) {
             list.appendChild(card);
             streamCards.set(event.sid, card);
             applyTypeFilter();
-            bumpCount();
             break;
         }
 
@@ -269,8 +267,8 @@ function handleEvent(event) {
 
             /* Finalise the progress bar + count, then fade it out */
             finishProgress();
-            _resultCount = sids.length;
-            updateCount();
+            applyTypeFilter();
+            setTimeout(applyTypeFilter, 400);
             const log = document.getElementById('progress-log');
             if (log) {
                 setTimeout(() => {
@@ -539,17 +537,9 @@ function initAudioPlayer(root) {
 // Media-type result filter (text / image / audio / video checkboxes).
 // Query progress: a bar that fills over the ~8s collect deadline + a live
 // result count that grows as items stream in.
-let _resultCount = 0;
-const PROGRESS_MS = 8000;
 function startProgress() {
-  _resultCount = 0;
-  updateCount();
-  /* the fill is a fresh element each search; its CSS animation runs on its own */
-}
-function bumpCount() { _resultCount++; updateCount(); }
-function updateCount() {
-  const c = document.getElementById('pbar-count');
-  if (c) c.textContent = _resultCount + (_resultCount === 1 ? ' result' : ' results');
+  /* the CSS bar animates on its own; reset the visible-result count */
+  applyTypeFilter();
 }
 function finishProgress() {
   const fill = document.getElementById('pbar-fill');
@@ -572,10 +562,15 @@ function applyTypeFilter() {
   if (!tf || !list) return;
   const checked = [...tf.querySelectorAll('input:checked')].map(c => c.value);
   const showAll = checked.length === 0;
+  let visible = 0;
   list.querySelectorAll('li.item-card').forEach(li => {
     const t = li.dataset.mtype || 'text';
-    li.classList.toggle('type-hidden', !showAll && !checked.includes(t));
+    const hidden = !showAll && !checked.includes(t);
+    li.classList.toggle('type-hidden', hidden);
+    if (!hidden) visible++;
   });
+  const c = document.getElementById('tf-count');
+  if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
 
 function openLightbox(src) {
