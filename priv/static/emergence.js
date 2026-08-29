@@ -303,8 +303,28 @@ function buildCard(item, sid, pos) {
 
     li.innerHTML = buildCardBody(item, pos);
 
-    /* Clickable whole card for web results */
-    if (item.url) {
+    /* Media cards: image → lightbox, video → source, audio → no navigation */
+    if (item.media_type === 'image') {
+        const full = safeUrl(item.media_url) || safeUrl(item.thumbnail);
+        if (full) {
+            li.classList.add('item-card--media');
+            li.addEventListener('click', e => {
+                if (e.target.closest('a')) return;
+                openLightbox(full);
+            });
+        }
+    } else if (item.media_type === 'video') {
+        const u = safeUrl(item.url) || safeUrl(item.media_url);
+        if (u) {
+            li.classList.add('item-card--media');
+            li.addEventListener('click', e => {
+                if (e.target.closest('a, audio')) return;
+                window.open(u, '_blank', 'noopener');
+            });
+        }
+    } else if (item.media_type === 'audio') {
+        li.classList.add('item-card--media');
+    } else if (item.url) {
         const url = safeUrl(item.url);
         if (url) {
             li.classList.add('item-card--link');
@@ -322,7 +342,9 @@ function buildCardBody(item, pos) {
     const num = String(pos + 1).padStart(2, '0');
     let body = '';
 
-    if (item.url) {
+    if (item.media_type) {
+        body = buildMediaBody(item);
+    } else if (item.url) {
         /* ── Web result ────────────────────────────────────────── */
         const url  = safeUrl(item.url) || '#';
         const hasTitle = item.label && item.label !== 'Result' && item.label !== item.url
@@ -379,6 +401,81 @@ function buildCardBody(item, pos) {
         <span class="item-index">${escHtml(num)}</span>
         <div class="item-body">${body}</div>
     `;
+}
+
+/* ── Media cards ────────────────────────────────────────── */
+function buildMediaBody(item) {
+    const t     = item.media_type;
+    const title = (item.label && item.label !== 'Result') ? escHtml(item.label) : '';
+    const foot  = mediaFooter(item);
+    const thumb = item.thumbnail ? safeUrl(item.thumbnail) : '';
+
+    if (t === 'audio') {
+        const src = safeUrl(item.media_url) || '';
+        return `
+            <div class="media-card media-audio">
+                ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
+                     referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
+                     onerror="this.remove()">` : ''}
+                <div class="media-meta">
+                    ${title ? `<span class="item-title">${title}</span>` : ''}
+                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                    ${src ? `<audio class="media-audio-el" controls preload="none"
+                         src="${escAttr(src)}"></audio>` : ''}
+                    ${foot}
+                </div>
+            </div>`;
+    }
+
+    /* image or video */
+    const durBadge = (t === 'video' && item.duration)
+        ? `<span class="media-duration">${escHtml(fmtDur(item.duration))}</span>` : '';
+    const play     = (t === 'video') ? `<span class="media-play">▶</span>` : '';
+    const thumbHtml = thumb
+        ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
+             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
+             onerror="this.classList.add('media-thumb--broken')">`
+        : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
+    return `
+        <div class="media-card media-${escAttr(t)}">
+            <div class="media-thumb-wrap">${thumbHtml}${play}${durBadge}</div>
+            <div class="media-meta">
+                ${title ? `<span class="item-title">${title}</span>` : ''}
+                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${foot}
+            </div>
+        </div>`;
+}
+
+function mediaFooter(item) {
+    const bits = [];
+    if (item.source)  bits.push(escHtml(item.source));
+    if (item.license) bits.push(escHtml(item.license));
+    if (item.author)  bits.push(escHtml(item.author));
+    return bits.length ? `<span class="media-license">${bits.join(' · ')}</span>` : '';
+}
+
+function fmtDur(s) {
+    s = parseInt(s, 10) || 0;
+    const m = Math.floor(s / 60), ss = String(s % 60).padStart(2, '0');
+    return `${m}:${ss}`;
+}
+
+let _lightbox = null;
+function openLightbox(src) {
+    if (!_lightbox) {
+        _lightbox = document.createElement('div');
+        _lightbox.id = 'media-lightbox';
+        _lightbox.className = 'lightbox';
+        _lightbox.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">';
+        _lightbox.addEventListener('click', () => _lightbox.classList.remove('open'));
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && _lightbox) _lightbox.classList.remove('open');
+        });
+        document.body.appendChild(_lightbox);
+    }
+    _lightbox.querySelector('img').src = src;
+    _lightbox.classList.add('open');
 }
 
 /* ================================================================== */

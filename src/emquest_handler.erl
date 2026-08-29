@@ -42,7 +42,7 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1]).
+-export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -656,12 +656,33 @@ normalise_item(Item) ->
     Value = first_defined(Props, [<<"resume">>, <<"value">>,
                                   <<"description">>],              <<>>),
     Ips   = first_defined(Props, [<<"ips">>],                      null),
-    Base  = #{<<"label">> => Label, <<"value">> => Value,
+    Base0 = #{<<"label">> => Label, <<"value">> => Value,
               <<"score">> => Score, <<"type">>  => Type},
+    Base  = add_media(Base0, Props),
     case {Url, Ips} of
         {null, [_|_]} -> Base#{<<"ips">>  => Ips};
         {null, _}     -> Base;
         _             -> Base#{<<"url">>  => Url}
+    end.
+
+%% @private Copy media fields into the item when the embryo declares a media_type.
+%% Non-media embryos are returned unchanged.
+add_media(Base, Props) ->
+    case first_defined(Props, [<<"media_type">>], null) of
+        null -> Base;
+        MType ->
+            Keys = [<<"thumbnail">>, <<"media_url">>, <<"duration">>,
+                    <<"license">>,   <<"author">>,    <<"source">>],
+            lists:foldl(
+              fun(K, Acc) ->
+                  case maps:get(K, Props, undefined) of
+                      undefined -> Acc;
+                      null      -> Acc;
+                      V         -> Acc#{K => V}
+                  end
+              end,
+              Base#{<<"media_type">> => MType},
+              Keys)
     end.
 
 first_defined(_Props, [], Default) -> Default;
