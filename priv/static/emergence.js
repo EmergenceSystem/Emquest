@@ -414,16 +414,18 @@ function buildMediaBody(item) {
         const src = safeUrl(item.media_url) || '';
         return `
             <div class="media-card media-audio">
-                ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
-                     referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
-                     onerror="this.remove()">` : ''}
-                <div class="media-meta">
-                    ${title ? `<span class="item-title">${title}</span>` : ''}
-                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
-                    ${src ? `<audio class="media-audio-el" controls preload="none"
-                         src="${escAttr(src)}"></audio>` : ''}
-                    ${foot}
+                <div class="media-audio-head">
+                    ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
+                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
+                         onerror="this.remove()">` : ''}
+                    <div class="media-meta">
+                        ${title ? `<span class="item-title">${title}</span>` : ''}
+                        ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                        ${foot}
+                    </div>
                 </div>
+                ${src ? `<audio class="media-audio-el" controls preload="none"
+                     src="${escAttr(src)}"></audio>` : ''}
             </div>`;
     }
 
