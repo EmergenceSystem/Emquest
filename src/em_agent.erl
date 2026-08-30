@@ -37,9 +37,11 @@
 %%--------------------------------------------------------------------
 %% @doc Fold the enabled meta-agents for `Phase' over `Ctx'.
 %%
-%% For LOT 1, only the `select' phase has a registered agent
-%% (`agent_router', gated by `[agents] router'). Unwired phases and
-%% disabled agents simply return `Ctx' unchanged.
+%% Registered phases: `expand' (`agent_planner', gated by
+%% `[agents] planner'), `select' (`agent_router', gated by
+%% `[agents] router'), `rerank' (`agent_judge', gated by
+%% `[agents] judge'). Unwired phases and disabled agents simply
+%% return `Ctx' unchanged.
 %% @end
 %%--------------------------------------------------------------------
 -spec run_phase(atom(), map()) -> map().
@@ -84,9 +86,19 @@ run_one(Mod, Phase, Ctx) ->
 
 %% @private
 %% @doc Enabled agent modules for `Phase', in fold order.
+phase_agents(expand) ->
+    case agent_on("planner") of
+        true  -> [agent_planner];
+        false -> []
+    end;
 phase_agents(select) ->
     case agent_on("router") of
         true  -> [agent_router];
+        false -> []
+    end;
+phase_agents(rerank) ->
+    case agent_on("judge") of
+        true  -> [agent_judge];
         false -> []
     end;
 phase_agents(_Phase) ->
