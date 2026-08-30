@@ -431,16 +431,32 @@ run_pipeline(Query, Req) ->
 
     %% Step 3 — em_pop fan-out: query vector → top-K peers → direct HTTP.
     %% Runs in parallel with the disco fan-out above.
+    %%
+    %% Peer selection goes through the meta-agent registry's `select'
+    %% phase first (`agent_router', semantic routing by meaning via
+    %% hf_topics embeddings). When the Router is off, hf_topics is down,
+    %% or it has nothing useful to offer, it returns `skip' and `Ctx1'
+    %% below has no `peers' key — we then fall back to the exact
+    %% pre-meta-agent behaviour: hash-cosine `peers_for_query/2' plus the
+    %% always-on media-bank filters.
     QueryVec = em_filter_vec:from_capabilities(SubQueries),
-    PopPeers0 = try emquest_pop:peers_for_query(QueryVec, 20)
-                catch
-                    exit:{noproc, _}       -> [];  %% emquest_pop not started
-                    exit:{timeout, _}      -> [];  %% gen_server call timeout
-                    error:badarg           -> []   %% malformed vector (defensive)
-                end,
-    %% Always include the media-bank filters so image/audio/video results
-    %% appear without the user having to type "photo"/"video" in the query.
-    PopPeers = ensure_media_peers(PopPeers0),
+    Ctx0 = #{query => Query, subqueries => SubQueries},
+    Ctx1 = em_agent:run_phase(select, Ctx0),
+    PopPeers = case Ctx1 of
+        #{peers := RoutedPeers} ->
+            RoutedPeers;
+        _ ->
+            PopPeers0 = try emquest_pop:peers_for_query(QueryVec, 20)
+                        catch
+                            exit:{noproc, _}       -> [];  %% emquest_pop not started
+                            exit:{timeout, _}      -> [];  %% gen_server call timeout
+                            error:badarg           -> []   %% malformed vector (defensive)
+                        end,
+            %% Always include the media-bank filters so image/audio/video
+            %% results appear without the user having to type "photo"/
+            %% "video" in the query.
+            ensure_media_peers(PopPeers0)
+    end,
     PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
 
     %% Report how many sources we are waiting on.

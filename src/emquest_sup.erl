@@ -88,8 +88,16 @@ init([]) ->
         type     => worker,
         modules  => [emquest_pop]
     },
+    LibrarianChild = #{
+        id       => em_librarian,
+        start    => {em_librarian, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [em_librarian]
+    },
     {ok, {#{strategy => one_for_one, intensity => 5, period => 10},
-          [PopChild]}}.
+          [PopChild, LibrarianChild]}}.
 
 %%====================================================================
 %% Internal
