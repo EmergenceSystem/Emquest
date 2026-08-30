@@ -34,7 +34,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([run/1]).
--export([reorder/3, parse_judge_scores/1]).
+-export([reorder/3, reorder_ce/2, parse_judge_scores/1]).
 
 -define(DEFAULT_TOP_N, 20).
 
@@ -54,15 +54,16 @@ run(#{query := Query, sortedsids := SortedSids, scores := ScoresMap,
       items := ItemsBySid} = Ctx)
   when is_binary(Query), is_list(SortedSids), is_map(ScoresMap),
        is_map(ItemsBySid) ->
+    _ = ScoresMap,
     {Head, Tail} = split_top(SortedSids, judge_top_n()),
     case Head of
         [] -> skip;
         _  ->
-            case judge_call(Query, Head, ItemsBySid) of
-                {ok, JudgeMap} ->
-                    NewHead = reorder(Head, ScoresMap, JudgeMap),
-                    {ok, Ctx#{sortedsids => NewHead ++ Tail}};
-                error ->
+            Docs = [doc_text(maps:get(Sid, ItemsBySid, #{})) || Sid <- Head],
+            case em_hf:rerank(Query, Docs) of
+                {ok, Scores} when length(Scores) =:= length(Head) ->
+                    {ok, Ctx#{sortedsids => reorder_ce(Head, Scores) ++ Tail}};
+                _ ->
                     skip
             end
     end;
@@ -84,6 +85,31 @@ reorder(Sids, ScoresMap, JudgeMap) ->
                             {J1, O1} >= {J2, O2}
                          end, Scored),
     [Sid || {Sid, _, _} <- Sorted].
+
+%%--------------------------------------------------------------------
+%% @doc Re-order `Sids' by descending cross-encoder score (`Scores' is
+%% aligned with `Sids'). Ties keep the original best-first order. Pure.
+%% @end
+%%--------------------------------------------------------------------
+-spec reorder_ce([non_neg_integer()], [float()]) -> [non_neg_integer()].
+reorder_ce(Sids, Scores) ->
+    Indexed = lists:zip3(Sids, Scores, lists:seq(1, length(Sids))),
+    Sorted  = lists:sort(fun({_, S1, P1}, {_, S2, P2}) ->
+                             {S1, -P1} >= {S2, -P2}
+                         end, Indexed),
+    [Sid || {Sid, _, _} <- Sorted].
+
+%% @private Title + resume text for a raw item (same shape as the
+%% router/dedup use), fed to the cross-encoder as the document side.
+doc_text(Item) ->
+    Props = maps:get(<<"properties">>, Item, Item),
+    L = to_bin(maps:get(<<"title">>,  Props, maps:get(<<"label">>, Props, <<>>))),
+    V = to_bin(maps:get(<<"resume">>, Props, maps:get(<<"value">>, Props, <<>>))),
+    case V of <<>> -> L; _ -> <<L/binary, " ", V/binary>> end.
+
+%% @private
+to_bin(B) when is_binary(B) -> B;
+to_bin(_) -> <<>>.
 
 %%--------------------------------------------------------------------
 %% @doc Parse ollama's `{"sid": score, ...}' response text into
@@ -132,56 +158,6 @@ judge_top_n() ->
             end;
         _ -> ?DEFAULT_TOP_N
     end.
-
-%% @private
-judge_call(Query, Sids, ItemsBySid) ->
-    Conf        = queen:read_llm_conf(),
-    Provider    = maps:get(provider, Conf, <<"mistral">>),
-    Prompt      = build_prompt(Query, Sids, ItemsBySid),
-    HandlerConf = queen:handler_conf(Provider, Conf,
-        <<"You rate search result relevance. Reply only with a JSON "
-          "object mapping sid strings to integer scores.">>),
-    Timeout = judge_timeout(Conf, length(Sids)),
-    case queen:call_handler_timeout(Provider, Prompt, HandlerConf, Timeout) of
-        {ok, Text} ->
-            parse_judge_scores(Text);
-        {error, Reason} ->
-            ?LOG_INFO("[agent_judge] ollama call failed: ~p", [Reason]),
-            error
-    end.
-
-%% @private
-%% @doc Timeout budget for scoring `N' items in one call.
-%%
-%% Unlike Planner/Router (one short call each), the Judge asks the
-%% model to score up to `judge_top_n' items in a single generation —
-%% on a small local model (qwen2.5:3b, CPU inference) that scales
-%% roughly linearly with item count rather than fitting in one
-%% `[llm] timeout_ms' budget. Floored at `[llm] timeout_ms' (so a
-%% short list is at least as forgiving as Planner/Router) and given a
-%% generous per-item allowance plus fixed overhead above that.
--spec judge_timeout(map(), non_neg_integer()) -> pos_integer().
-judge_timeout(Conf, N) ->
-    max(queen:llm_timeout(Conf), 3000 + N * 2500).
-
-%% @private
-build_prompt(Query, Sids, ItemsBySid) ->
-    ItemsJson = iolist_to_binary(json:encode(
-        [item_json(Sid, maps:get(Sid, ItemsBySid, #{})) || Sid <- Sids])),
-    <<"You receive search results and a query. Rate each result's "
-      "relevance to the query from 0 (irrelevant) to 3 (highly "
-      "relevant). Reply ONLY with a raw JSON object mapping each "
-      "result's \"sid\" (as a string) to its integer score, no "
-      "markdown, no explanation.\n"
-      "Example: {\"12\": 3, \"7\": 0}\n\n"
-      "Query: ", Query/binary, "\n\nResults:\n", ItemsJson/binary>>.
-
-%% @private Same title/resume extraction shape as `queen:rank/2'.
-item_json(Sid, Item) ->
-    Props = maps:get(<<"properties">>, Item, Item),
-    Label = maps:get(<<"title">>,  Props, maps:get(<<"label">>,  Props, <<>>)),
-    Value = maps:get(<<"resume">>, Props, maps:get(<<"value">>,  Props, <<>>)),
-    #{<<"sid">> => sid_key(Sid), <<"l">> => Label, <<"v">> => Value}.
 
 %% @private
 sid_key(Sid) when is_integer(Sid) -> integer_to_binary(Sid);

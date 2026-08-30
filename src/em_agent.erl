@@ -97,10 +97,10 @@ phase_agents(select) ->
         false -> []
     end;
 phase_agents(rerank) ->
-    case agent_on("judge") of
-        true  -> [agent_judge];
-        false -> []
-    end;
+    lists:append([
+        case agent_on("dedup") of true  -> [agent_dedup]; false -> [] end,
+        case agent_on("judge") of true  -> [agent_judge]; false -> [] end
+    ]);
 phase_agents(_Phase) ->
     [].
 
