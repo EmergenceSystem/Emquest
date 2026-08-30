@@ -1,7 +1,7 @@
 {application, emquest, [
     {description, "Client Emquest — semantic search dispatcher"},
     {vsn, "0.2.0"},
-    {registered, [emquest_pop]},
+    {registered, [emquest_pop, em_librarian]},
     {mod, {emquest_app, []}},
     {applications, [
         kernel,
@@ -20,7 +20,13 @@
         queen,
         em_filter_vec,
         em_pop_node,
-        em_pop_http
+        em_pop_http,
+        em_hf,
+        em_librarian,
+        em_agent,
+        agent_router,
+        agent_planner,
+        agent_judge
     ]},
     {licenses, ["Apache 2.0"]},
     {links, [{"GitHub", "https://github.com/EmergenceSystem/Emquest"}]}

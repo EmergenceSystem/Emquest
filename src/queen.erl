@@ -64,6 +64,12 @@
          pop_seeds/0, emquest_pop_port/0,
          conf_path/0, parse_conf/1]).
 
+%% Exposed for reuse by the Planner/Judge meta-agents (`agent_planner',
+%% `agent_judge'), which need the same bounded ollama call plumbing
+%% `expand/1' and `rank/2' use internally, without duplicating it.
+-export([read_llm_conf/0, handler_conf/3, llm_timeout/1,
+         call_handler/3, call_handler_timeout/4]).
+
 -define(DEFAULT_SYSTEM_PROMPT,
     "You are a search assistant. Be concise and precise.").
 

@@ -70,9 +70,18 @@ init([]) ->
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}
             ]),
+            %% `idle_timeout' raised from cowboy's 60s default: `/query'
+            %% holds the connection open (no bytes sent) while the
+            %% `rerank' phase's `agent_judge' waits on ollama to score
+            %% the top-N items — on a small local model (CPU inference)
+            %% that can take tens of seconds (see `agent_judge:judge_timeout/2').
+            %% Judge/Planner/Router each still fall back on their own
+            %% bounded timeout well under this; this only keeps the
+            %% *connection* alive long enough for that fallback to
+            %% reach the client instead of the socket being cut first.
             {ok, _} = cowboy:start_clear(emquest_listener,
                 [{port, Port}],
-                #{env => #{dispatch => Dispatch}}
+                #{env => #{dispatch => Dispatch}, idle_timeout => 120000}
             ),
             io:format("[emquest] HTTP listening on http://localhost:~p~n", [Port]),
             io:format("[emquest] Shell: emquest_cli:query(\"...\").~n");
@@ -88,8 +97,16 @@ init([]) ->
         type     => worker,
         modules  => [emquest_pop]
     },
+    LibrarianChild = #{
+        id       => em_librarian,
+        start    => {em_librarian, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [em_librarian]
+    },
     {ok, {#{strategy => one_for_one, intensity => 5, period => 10},
-          [PopChild]}}.
+          [PopChild, LibrarianChild]}}.
 
 %%====================================================================
 %% Internal

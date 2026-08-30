@@ -18,14 +18,19 @@
 %%% === Pipeline (POST /query) ===
 %%%
 %%% ```
-%%% 1. queen:expand/1      — split long queries into sub-queries (LLM)
+%%% 1. queen:expand/1      — split long queries into sub-queries (LLM),
+%%%                          or `agent_planner' (`expand' meta-agent
+%%%                          phase) when `[agents] planner' is on
 %%% 2. queen:disco_nodes/0 — resolve all configured disco node URLs
 %%% 3. Fan-out             — one process per (sub-query × disco node),
 %%%                          all running in parallel
 %%% 4. Collect             — stream each item to the SSE client as it
 %%%                          arrives; 8 s per-process timeout
-%%% 5. Deduplicate         — first occurrence by URL wins
-%%% 6. Reorder             — always emitted so the browser can remove
+%%% 5. Deduplicate + rank  — first occurrence by URL wins, scored by
+%%%                          `aggregate_and_rank/3'
+%%% 6. Reorder             — re-scored by `agent_judge' (`rerank' phase)
+%%%                          when `[agents] judge' is on, then always
+%%%                          emitted so the browser can remove
 %%%                          duplicates that arrived before dedup ran
 %%% '''
 %%%
@@ -409,8 +414,22 @@ run_pipeline(Query, Req) ->
     logger:notice("[emquest] query: ~ts", [Query]),
 
     %% Step 1 — expand query into sub-queries.
+    %%
+    %% Goes through the meta-agent registry's `expand' phase first
+    %% (`agent_planner', LLM-driven decomposition via ollama). When the
+    %% Planner is off, ollama is down/slow, or its output doesn't parse,
+    %% it returns `skip' and `CtxExpand' below has no `subqueries' key
+    %% — we fall back to the exact pre-meta-agent behaviour:
+    %% `queen:expand/1' (HF topics -> local_keywords).
     sse(Req, status, <<"Expanding query...">>),
-    SubQueries = queen:expand(Query),
+    CtxExpand = em_agent:run_phase(expand, #{query => Query}),
+    SubQueries = case CtxExpand of
+        #{subqueries := PlannedSubQueries}
+          when is_list(PlannedSubQueries), PlannedSubQueries =/= [] ->
+            PlannedSubQueries;
+        _ ->
+            queen:expand(Query)
+    end,
 
     %% Step 2 — disco fan-out: one process per (sub-query × disco node).
     Nodes     = queen:disco_nodes(),
@@ -431,16 +450,32 @@ run_pipeline(Query, Req) ->
 
     %% Step 3 — em_pop fan-out: query vector → top-K peers → direct HTTP.
     %% Runs in parallel with the disco fan-out above.
+    %%
+    %% Peer selection goes through the meta-agent registry's `select'
+    %% phase first (`agent_router', semantic routing by meaning via
+    %% hf_topics embeddings). When the Router is off, hf_topics is down,
+    %% or it has nothing useful to offer, it returns `skip' and `Ctx1'
+    %% below has no `peers' key — we then fall back to the exact
+    %% pre-meta-agent behaviour: hash-cosine `peers_for_query/2' plus the
+    %% always-on media-bank filters.
     QueryVec = em_filter_vec:from_capabilities(SubQueries),
-    PopPeers0 = try emquest_pop:peers_for_query(QueryVec, 20)
-                catch
-                    exit:{noproc, _}       -> [];  %% emquest_pop not started
-                    exit:{timeout, _}      -> [];  %% gen_server call timeout
-                    error:badarg           -> []   %% malformed vector (defensive)
-                end,
-    %% Always include the media-bank filters so image/audio/video results
-    %% appear without the user having to type "photo"/"video" in the query.
-    PopPeers = ensure_media_peers(PopPeers0),
+    Ctx0 = #{query => Query, subqueries => SubQueries},
+    Ctx1 = em_agent:run_phase(select, Ctx0),
+    PopPeers = case Ctx1 of
+        #{peers := RoutedPeers} ->
+            RoutedPeers;
+        _ ->
+            PopPeers0 = try emquest_pop:peers_for_query(QueryVec, 20)
+                        catch
+                            exit:{noproc, _}       -> [];  %% emquest_pop not started
+                            exit:{timeout, _}      -> [];  %% gen_server call timeout
+                            error:badarg           -> []   %% malformed vector (defensive)
+                        end,
+            %% Always include the media-bank filters so image/audio/video
+            %% results appear without the user having to type "photo"/
+            %% "video" in the query.
+            ensure_media_peers(PopPeers0)
+    end,
     PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
 
     %% Report how many sources we are waiting on.
@@ -459,7 +494,32 @@ run_pipeline(Query, Req) ->
                   [length(TaggedItems), TotalWorkers]),
 
     {SortedSids, ScoresMap} = aggregate_and_rank(TaggedItems, SubQueries, QueryVec),
-    sse_reorder(Req, SortedSids, ScoresMap),
+
+    %% Step 6 — LLM re-rank of the top-N via the meta-agent registry's
+    %% `rerank' phase (`agent_judge'). `TaggedItems' has one entry per
+    %% streamed sid (`Sid' is the running counter assigned in
+    %% `collect_disco_streaming/4', globally unique), so it doubles as
+    %% the sid -> raw item lookup the Judge needs for title/url/resume.
+    %% When the Judge is off, ollama is down/slow, or its output doesn't
+    %% parse, `run_phase/2' returns `skip' and `CtxRerank' below has no
+    %% `sortedsids' key — we fall back to the exact pre-meta-agent
+    %% ranking `aggregate_and_rank/3' already produced.
+    ItemsBySid = maps:from_list(
+        [{Sid, Item} || {Sid, Item, _Rank, _SubQ, _Trust} <- TaggedItems]),
+    sse(Req, status, <<"Reranking results...">>),
+    CtxRerank = em_agent:run_phase(rerank, #{
+        query      => Query,
+        sortedsids => SortedSids,
+        scores     => ScoresMap,
+        items      => ItemsBySid
+    }),
+    {FinalSids, FinalScores} = case CtxRerank of
+        #{sortedsids := JudgedSids} when is_list(JudgedSids), JudgedSids =/= [] ->
+            {JudgedSids, maps:get(scores, CtxRerank, ScoresMap)};
+        _ ->
+            {SortedSids, ScoresMap}
+    end,
+    sse_reorder(Req, FinalSids, FinalScores),
 
     cowboy_req:stream_body(<<>>, fin, Req).
 
