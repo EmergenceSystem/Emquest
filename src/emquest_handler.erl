@@ -411,6 +411,18 @@ handle_query(RawBody, Req0) ->
 %% @end
 -spec run_pipeline(binary(), cowboy_req:req()) -> ok.
 run_pipeline(Query, Req) ->
+    case (catch em_cache:get_from_cache(Query)) of
+        {ok, Cached} when is_list(Cached), Cached =/= [] ->
+            logger:notice("[emquest] cache hit: ~ts (~p items)",
+                          [Query, length(Cached)]),
+            sse(Req, status, <<"Cached results">>),
+            replay_cached(Cached, Req),
+            cowboy_req:stream_body(<<>>, fin, Req);
+        _ ->
+            run_pipeline_full(Query, Req)
+    end.
+
+run_pipeline_full(Query, Req) ->
     logger:notice("[emquest] query: ~ts", [Query]),
 
     %% Step 1 — expand query into sub-queries.
@@ -520,8 +532,27 @@ run_pipeline(Query, Req) ->
             {SortedSids, ScoresMap}
     end,
     sse_reorder(Req, FinalSids, FinalScores),
+    maybe_cache(Query, FinalSids, ItemsBySid),
 
     cowboy_req:stream_body(<<>>, fin, Req).
+
+%% @private
+%% @doc Replay a cached, final-ordered item list as the SSE stream a
+%% live query would produce: each item, then a reorder fixing the order.
+replay_cached(Items, Req) ->
+    N = lists:foldl(fun(Item, Ctr) ->
+                        sse_item(Req, Ctr, Item), Ctr + 1
+                    end, 0, Items),
+    sse_reorder(Req, lists:seq(0, N - 1), #{}).
+
+%% @private
+%% @doc Store the final ranked results under the query (10 min TTL).
+%% Empty result sets are skipped so failures are never cached.
+maybe_cache(_Query, [], _ItemsBySid) -> ok;
+maybe_cache(Query, FinalSids, ItemsBySid) ->
+    Items = [normalise_item(maps:get(Sid, ItemsBySid, #{})) || Sid <- FinalSids],
+    _ = (catch em_cache:put_in_cache(Query, Items, 600)),
+    ok.
 
 %%====================================================================
 %% Streaming disco collection
