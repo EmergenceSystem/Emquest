@@ -16,7 +16,7 @@
   <<"gutenberg_filter">> => <<"free public-domain ebooks and classic literature, Project Gutenberg books, novels, such as Shakespeare Dickens">>,
   <<"hackernews_filter">> => <<"Hacker News tech stories, startups, programming, technology news and discussions">>,
   <<"inaturalist_filter">> => <<"species, animals, plants, wildlife, biodiversity, nature observations, taxonomy, such as fox oak butterfly">>,
-  <<"internet_archive_filter">> => <<"archived items, old media, books, audio, video, software, web archive, archive.org collections">>,
+  <<"internet_archive_filter">> => <<"archived items, images, photographs, books, texts, old media, audio, video, software, archive.org collections">>,
   <<"ip_filter">> => <<"IP address geolocation, network info, where is an IP, ASN, ISP, geolocate an address">>,
   <<"iso_filter">> => <<"ISO standards, country codes, currency codes, language codes, ISO norms and references">>,
   <<"korben_rss_filter">> => <<"French tech blog korben.fr, technology, gadgets, software tips, geek news in French">>,
@@ -47,5 +47,8 @@
   <<"wikidata_filter">> => <<"structured knowledge facts, entities, people, places, dates, Wikidata, such as Paris Einstein France">>,
   <<"wikimedia_commons_filter">> => <<"freely-licensed images, audio and video from Wikimedia Commons, media files of any subject">>,
   <<"wikipedia_filter">> => <<"encyclopedia knowledge on any topic: people, places, history, science, technology, concepts, events, such as quantum physics Napoleon Paris">>,
-  <<"wiktionary_filter">> => <<"word definitions, dictionary, meaning of words, translations, etymology, vocabulary">>
+  <<"wiktionary_filter">> => <<"word definitions, dictionary, meaning of words, translations, etymology, vocabulary">>,
+  <<"cleveland_filter">> => <<"artworks and paintings from the Cleveland Museum of Art, art images, sculptures, drawings, museum collection, such as Monet Rodin">>,
+  <<"gbif_filter">> => <<"photos of species, animals, plants, wildlife, insects, birds, biodiversity occurrences, nature images, such as fox oak butterfly">>,
+  <<"met_filter">> => <<"artworks from the Metropolitan Museum of Art, paintings, sculptures, art history images, ancient and modern art, such as Van Gogh Egyptian">>
 }.

@@ -839,7 +839,8 @@ fetch_from_agent(Body, Url) ->
 ensure_media_peers(Selected) ->
     Always = [<<"openverse_filter">>, <<"wikimedia_commons_filter">>,
               <<"artic_filter">>, <<"nasa_images_filter">>,
-              <<"sepiasearch_filter">>],
+              <<"sepiasearch_filter">>,
+              <<"cleveland_filter">>, <<"gbif_filter">>, <<"met_filter">>],
     SelKeys = [endpoint_key(P) || {P, _} <- Selected],
     All = try emquest_pop:all_peers() catch _:_ -> [] end,
     Extra = [{P, 1.0}
