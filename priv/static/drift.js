@@ -375,7 +375,7 @@ function buildMediaBody(item) {
     const thumbHtml = thumb
         ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
              src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
-             onerror="mediaImgError(this)">`
+             onload="mediaImgLoad(this)" onerror="mediaImgError(this)">`
         : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
     return `
         <div class="media-card media-${escAttr(t)}">
@@ -393,6 +393,9 @@ function mediaImgError(img) {
     if (card) { card.remove(); return; }
   }
   img.classList.add('media-thumb--broken');
+}
+function mediaImgLoad(img) {
+  if (!img.naturalWidth || img.naturalWidth < 2 || img.naturalHeight < 2) mediaImgError(img);
 }
 
 let _lightbox = null;

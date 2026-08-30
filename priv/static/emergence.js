@@ -457,7 +457,7 @@ function buildMediaBody(item) {
     const thumbHtml = thumb
         ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
              src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
-             onerror="mediaImgError(this)">`
+             onload="mediaImgLoad(this)" onerror="mediaImgError(this)">`
         : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
     return `
         <div class="media-card media-${escAttr(t)}">
@@ -487,9 +487,19 @@ function fmtDur(s) {
 function mediaImgError(img) {
   if (img.closest('.media-image')) {
     const card = img.closest('.item-card, .drift-card');
-    if (card) { card.remove(); return; }
+    if (card) {
+      // Drop the stream reference too, else a later reorder re-appends the broken card.
+      const sid = card.dataset.sid;
+      if (sid !== undefined) streamCards.delete(Number(sid));
+      card.remove();
+      return;
+    }
   }
   img.classList.add('media-thumb--broken');
+}
+function mediaImgLoad(img) {
+  // A 200 with no real pixels (e.g. a Cloudflare block page decoded as an image) = no thumbnail.
+  if (!img.naturalWidth || img.naturalWidth < 2 || img.naturalHeight < 2) mediaImgError(img);
 }
 
 let _lightbox = null;
