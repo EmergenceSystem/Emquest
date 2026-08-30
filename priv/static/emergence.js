@@ -457,7 +457,7 @@ function buildMediaBody(item) {
     const thumbHtml = thumb
         ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
              src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
-             onerror="this.classList.add('media-thumb--broken')">`
+             onerror="mediaImgError(this)">`
         : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
     return `
         <div class="media-card media-${escAttr(t)}">
@@ -482,6 +482,14 @@ function fmtDur(s) {
     s = parseInt(s, 10) || 0;
     const m = Math.floor(s / 60), ss = String(s % 60).padStart(2, '0');
     return `${m}:${ss}`;
+}
+
+function mediaImgError(img) {
+  if (img.closest('.media-image')) {
+    const card = img.closest('.item-card, .drift-card');
+    if (card) { card.remove(); return; }
+  }
+  img.classList.add('media-thumb--broken');
 }
 
 let _lightbox = null;
