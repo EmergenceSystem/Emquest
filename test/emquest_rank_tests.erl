@@ -43,3 +43,14 @@ rank_single_item_test() ->
     Vec = em_filter_vec:from_capabilities([<<"x">>]),
     {Sids, _} = emquest_rank:rank(<<"anything">>, [tagged(9, <<"whatever">>, 0)], Vec),
     ?assertEqual([9], Sids).
+
+mmr_diversifies_test() ->
+    %% sids 1,2 near-identical vectors; 3 orthogonal. Relevance order [1,2,3].
+    Emb = #{1 => [1.0, 0.0], 2 => [0.99, 0.01], 3 => [0.0, 1.0]},
+    Out = emquest_rank:mmr([1, 2, 3], Emb, 0.7),
+    ?assertEqual(1, hd(Out)),
+    ?assertEqual(3, hd(tl(Out))).
+
+mmr_missing_emb_test() ->
+    Out = emquest_rank:mmr([1, 2], #{}, 0.7),
+    ?assertEqual([1, 2], Out).

@@ -7,7 +7,7 @@
 %%%-------------------------------------------------------------------
 -module(emquest_rank).
 
--export([normalize/1, words/1, lex_score/3, rank/3]).
+-export([normalize/1, words/1, lex_score/3, rank/3, mmr/3]).
 
 %% @doc Lowercase + collapse whitespace + trim.
 -spec normalize(binary()) -> binary().
@@ -143,3 +143,32 @@ weights() -> {0.6, 0.25, 0.15}.
 
 %% @private [rank] phrase_boost, default 0.5.
 phrase_boost() -> 0.5.
+
+%% @doc Reorder an already relevance-ranked sid list by Maximal Marginal
+%% Relevance. Relevance is derived from input position (rank 1 highest);
+%% diversity uses cosine of the given embeddings. Sids without an
+%% embedding are treated as maximally diverse (sim 0). Pure.
+-spec mmr([non_neg_integer()], map(), float()) -> [non_neg_integer()].
+mmr(Ordered, Emb, Lambda) ->
+    N = max(length(Ordered), 1),
+    Rel = maps:from_list(
+        [{S, 1.0 - (I - 1) / N} || {S, I} <- lists:zip(Ordered, lists:seq(1, length(Ordered)))]),
+    mmr_pick(Ordered, [], [], Emb, Rel, Lambda).
+
+mmr_pick([], Acc, _Picked, _Emb, _Rel, _L) -> lists:reverse(Acc);
+mmr_pick(Rem, Acc, Picked, Emb, Rel, L) ->
+    Scored = [{S, L * maps:get(S, Rel, 0.0) - (1.0 - L) * max_sim(S, Picked, Emb)}
+              || S <- Rem],
+    {Best, _} = hd(lists:sort(fun({_, A}, {_, B}) -> A >= B end, Scored)),
+    mmr_pick(lists:delete(Best, Rem), [Best | Acc], [Best | Picked], Emb, Rel, L).
+
+%% @private max cosine of S against already-picked (0 if S has no embedding).
+max_sim(S, Picked, Emb) ->
+    case maps:get(S, Emb, undefined) of
+        undefined -> 0.0;
+        V ->
+            Sims = [agent_dedup:cosine(V, PV)
+                    || P <- Picked, (PV = maps:get(P, Emb, undefined)) =/= undefined],
+            lists:max([0.0 | Sims])
+    end.
+
