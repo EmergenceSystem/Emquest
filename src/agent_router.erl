@@ -33,7 +33,7 @@
 
 -define(DEFAULT_K, 12).
 -define(ALWAYS_MEDIA, [<<"openverse_filter">>, <<"wikimedia_commons_filter">>,
-                        <<"artic_filter">>, <<"nasa_images_filter">>,
+                        <<"nasa_images_filter">>,
                         <<"sepiasearch_filter">>,
                         <<"cleveland_filter">>, <<"gbif_filter">>, <<"met_filter">>]).
 
