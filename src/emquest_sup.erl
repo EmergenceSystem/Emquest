@@ -65,6 +65,8 @@ init([]) ->
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
                     {"/network/peers",  emquest_handler, network_peers},
+                    {"/health",         emquest_handler, health},
+                    {"/status",         emquest_handler, status},
                     {"/stt",            emquest_handler, stt},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
@@ -105,8 +107,16 @@ init([]) ->
         type     => worker,
         modules  => [em_librarian]
     },
+    HealthChild = #{
+        id       => emquest_health,
+        start    => {emquest_health, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [emquest_health]
+    },
     {ok, {#{strategy => one_for_one, intensity => 5, period => 10},
-          [PopChild, LibrarianChild]}}.
+          [PopChild, LibrarianChild, HealthChild]}}.
 
 %%====================================================================
 %% Internal

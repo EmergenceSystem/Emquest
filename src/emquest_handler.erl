@@ -116,6 +116,32 @@ init(Req0, network_peers) ->
         <<"cache-control">> => <<"no-cache">>
     }, Body, Req0), network_peers};
 
+init(Req0, health) ->
+    Peers = emquest_health:status(),
+    PJson = [#{<<"name">>    => maps:get(name, P, <<>>),
+               <<"host">>    => maps:get(host, P, <<>>),
+               <<"port">>    => nn(maps:get(port, P, undefined)),
+               <<"alive">>   => maps:get(alive, P, false),
+               <<"latency">> => nn(maps:get(latency, P, null)),
+               <<"fails">>   => maps:get(fails, P, 0),
+               <<"last_ok">> => nn(maps:get(last_ok, P, null))} || P <- Peers],
+    Cache = try maps:merge(em_cache_store:health(), em_cache_store:stats())
+            catch _:_ -> #{} end,
+    Payload = #{<<"peers">>       => PJson,
+                <<"peer_count">>  => length(PJson),
+                <<"alive_count">> => length([1 || P <- Peers, maps:get(alive, P, false)]),
+                <<"cache">>       => Cache},
+    Body = iolist_to_binary(json:encode(Payload)),
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">>  => <<"application/json">>,
+        <<"cache-control">> => <<"no-cache">>
+    }, Body, Req0), health};
+
+init(Req0, status) ->
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">> => <<"text/html; charset=utf-8">>
+    }, status_page(), Req0), status};
+
 init(Req0, query) ->
     case cowboy_req:method(Req0) of
         <<"POST">> ->
@@ -488,7 +514,8 @@ run_pipeline_full(Query, Req) ->
             %% "video" in the query.
             ensure_media_peers(PopPeers0)
     end,
-    PopPids  = spawn_pop_workers(SubQueries, PopPeers, Parent),
+    LivePeers = emquest_health:filter_live(PopPeers),
+    PopPids  = spawn_pop_workers(SubQueries, LivePeers, Parent),
 
     %% Report how many sources we are waiting on.
     TotalWorkers = length(DiscoPids) + length(PopPids),
@@ -1105,6 +1132,53 @@ truncate(B, Max) ->
 %% @private
 %% @doc Send a `status' or `error' SSE event to the client.
 %% @end
+%% @private
+nn(undefined) -> null;
+nn(V)         -> V.
+
+%% @private Self-contained health dashboard; fetches /health and renders.
+status_page() ->
+    <<"<!doctype html><html><head><meta charset=utf-8>"
+      "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+      "<title>Emergence status</title><style>"
+      "body{font:14px system-ui,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}"
+      "header{padding:16px 20px;border-bottom:1px solid #232733;display:flex;gap:20px;align-items:baseline;flex-wrap:wrap}"
+      "h1{font-size:16px;margin:0;color:#3ddc84}"
+      ".k{color:#8b93a7}.v{color:#e6e6e6;font-weight:600}"
+      "table{width:100%;border-collapse:collapse}"
+      "th,td{text-align:left;padding:7px 20px;border-bottom:1px solid #1b1f29;white-space:nowrap}"
+      "th{color:#8b93a7;font-weight:600;font-size:12px;position:sticky;top:0;background:#0f1115}"
+      ".dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}"
+      ".up{background:#3ddc84}.down{background:#e5484d}"
+      "td.num{text-align:right;font-variant-numeric:tabular-nums}"
+      ".muted{color:#5b6274}</style></head><body>"
+      "<header><h1>Emergence &middot; status</h1>"
+      "<span class=k>peers <span class=v id=pc>-</span></span>"
+      "<span class=k>alive <span class=v id=ac>-</span></span>"
+      "<span class=k>cache L1/L2/miss <span class=v id=cache>-</span></span>"
+      "<span class=k>redis <span class=v id=redis>-</span></span>"
+      "<span class=muted id=ts></span></header>"
+      "<table><thead><tr><th>filter</th><th>endpoint</th>"
+      "<th class=num>latency</th><th class=num>fails</th></tr></thead>"
+      "<tbody id=rows></tbody></table>"
+      "<script>"
+      "async function load(){"
+      "let d=await (await fetch('/health')).json();"
+      "document.getElementById('pc').textContent=d.peer_count;"
+      "document.getElementById('ac').textContent=d.alive_count;"
+      "let c=d.cache||{};"
+      "document.getElementById('cache').textContent=(c.l1_hits||0)+'/'+(c.l2_hits||0)+'/'+(c.misses||0);"
+      "document.getElementById('redis').textContent=c.redis?'on':'off';"
+      "document.getElementById('ts').textContent=new Date().toLocaleTimeString();"
+      "let ps=(d.peers||[]).slice().sort((a,b)=>(a.alive-b.alive)||(a.name>b.name?1:-1));"
+      "document.getElementById('rows').innerHTML=ps.map(p=>"
+      "'<tr><td><span class=\"dot '+(p.alive?'up':'down')+'\"></span>'+(p.name||'?')+"
+      "'</td><td class=muted>'+(p.host||'')+':'+(p.port==null?'-':p.port)+"
+      "'</td><td class=num>'+(p.latency==null?'-':p.latency+' ms')+"
+      "'</td><td class=num>'+(p.fails||0)+'</td></tr>').join('');}"
+      "load();setInterval(load,10000);"
+      "</script></body></html>">>.
+
 -spec sse(cowboy_req:req(), atom(), binary()) -> ok.
 sse(Req, Type, Message) ->
     Payload = iolist_to_binary(json:encode(#{

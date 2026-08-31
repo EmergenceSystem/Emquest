@@ -28,7 +28,8 @@
         agent_router,
         agent_planner,
         agent_judge,
-        agent_dedup
+        agent_dedup,
+        emquest_health
     ]},
     {licenses, ["Apache 2.0"]},
     {links, [{"GitHub", "https://github.com/EmergenceSystem/Emquest"}]}
