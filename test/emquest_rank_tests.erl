@@ -2,8 +2,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 item(Title, Resume) ->
+    Url = <<"http://x/", (integer_to_binary(erlang:phash2(Title)))/binary>>,
     #{<<"properties">> => #{<<"title">> => Title, <<"resume">> => Resume,
-                            <<"url">> => <<"http://x">>}}.
+                            <<"url">> => Url}}.
 
 normalize_test() ->
     ?assertEqual(<<"tarte aux pommes">>,
@@ -24,3 +25,21 @@ lex_title_beats_body_test() ->
     InTitle = emquest_rank:lex_score(QN, QW, item(<<"pomme">>, <<"rien">>)),
     InBody  = emquest_rank:lex_score(QN, QW, item(<<"rien">>, <<"une pomme ici">>)),
     ?assert(InTitle > InBody).
+
+tagged(Sid, Title, Rank) ->
+    {Sid, item(Title, <<>>), Rank, <<"q">>, 1.0}.
+
+rank_phrase_first_test() ->
+    Vec = em_filter_vec:from_capabilities([<<"tarte">>, <<"pomme">>]),
+    Tagged = [tagged(1, <<"Marche aux pommes">>, 0),
+              tagged(2, <<"Tarte aux pommes maison">>, 0),
+              tagged(3, <<"Recette de tarte">>, 0)],
+    {Sids, Scores} = emquest_rank:rank(<<"tarte aux pommes">>, Tagged, Vec),
+    ?assertEqual(2, hd(Sids)),
+    ?assert(is_map(Scores)),
+    ?assertEqual(3, length(Sids)).
+
+rank_single_item_test() ->
+    Vec = em_filter_vec:from_capabilities([<<"x">>]),
+    {Sids, _} = emquest_rank:rank(<<"anything">>, [tagged(9, <<"whatever">>, 0)], Vec),
+    ?assertEqual([9], Sids).
