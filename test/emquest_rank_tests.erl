@@ -54,3 +54,11 @@ mmr_diversifies_test() ->
 mmr_missing_emb_test() ->
     Out = emquest_rank:mmr([1, 2], #{}, 0.7),
     ?assertEqual([1, 2], Out).
+
+
+conf_defaults_test() ->
+    {WL, WV, WA} = emquest_rank:weights(),
+    ?assert(abs((WL + WV + WA) - 1.0) < 0.001),
+    ?assert(WL > WV),
+    ?assert(emquest_rank:phrase_boost() >= 0.0),
+    ?assert(emquest_rank:mmr_lambda() >= 0.0 andalso emquest_rank:mmr_lambda() =< 1.0).

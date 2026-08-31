@@ -7,7 +7,8 @@
 %%%-------------------------------------------------------------------
 -module(emquest_rank).
 
--export([normalize/1, words/1, lex_score/3, rank/3, mmr/3]).
+-export([normalize/1, words/1, lex_score/3, rank/3, mmr/3,
+         weights/0, phrase_boost/0, mmr_lambda/0, conf/0]).
 
 %% @doc Lowercase + collapse whitespace + trim.
 -spec normalize(binary()) -> binary().
@@ -138,11 +139,38 @@ minmax(Xs) ->
         false -> fun(_) -> 0.0 end
     end.
 
-%% @private [rank] weights, defaults lexical-dominant.
-weights() -> {0.6, 0.25, 0.15}.
+%% @doc [rank] section of emergence.conf as #{string() => string()}.
+conf() ->
+    case queen:conf_path() of
+        undefined -> #{};
+        Path ->
+            case file:read_file(Path) of
+                {ok, Bin} -> maps:get("rank", queen:parse_conf(Bin), #{});
+                _         -> #{}
+            end
+    end.
 
-%% @private [rank] phrase_boost, default 0.5.
-phrase_boost() -> 0.5.
+weights() ->
+    {fl("wL", 0.6), fl("wV", 0.25), fl("wA", 0.15)}.
+
+phrase_boost() -> fl("phrase_boost", 0.5).
+
+mmr_lambda() -> fl("mmr_lambda", 0.7).
+
+%% @private float from [rank] key with default.
+fl(Key, Default) ->
+    case maps:get(Key, conf(), undefined) of
+        undefined -> Default;
+        V when is_list(V) ->
+            case string:to_float(V) of
+                {F, _} when is_float(F) -> F;
+                _ -> case string:to_integer(V) of
+                         {I, _} when is_integer(I) -> float(I);
+                         _ -> Default
+                     end
+            end;
+        _ -> Default
+    end.
 
 %% @doc Reorder an already relevance-ranked sid list by Maximal Marginal
 %% Relevance. Relevance is derived from input position (rank 1 highest);
