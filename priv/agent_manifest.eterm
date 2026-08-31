@@ -50,5 +50,8 @@
   <<"wiktionary_filter">> => <<"word definitions, dictionary, meaning of words, translations, etymology, vocabulary">>,
   <<"cleveland_filter">> => <<"artworks and paintings from the Cleveland Museum of Art, art images, sculptures, drawings, museum collection, such as Monet Rodin">>,
   <<"gbif_filter">> => <<"photos of species, animals, plants, wildlife, insects, birds, biodiversity occurrences, nature images, such as fox oak butterfly">>,
-  <<"met_filter">> => <<"artworks from the Metropolitan Museum of Art, paintings, sculptures, art history images, ancient and modern art, such as Van Gogh Egyptian">>
+  <<"met_filter">> => <<"artworks from the Metropolitan Museum of Art, paintings, sculptures, art history images, ancient and modern art, such as Van Gogh Egyptian">>,
+  <<"openalex_filter">> => <<"scholarly research papers, academic works, scientific literature, citations, authors, journals, such as machine learning genomics climate">>,
+  <<"datagouv_filter">> => <<"French open government data, public datasets, statistics, administrations, data.gouv.fr, donnees publiques francaises">>,
+  <<"coingecko_filter">> => <<"cryptocurrency prices, coins, tokens, market cap, crypto market data, such as bitcoin ethereum solana">>
 }.
