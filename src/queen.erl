@@ -94,27 +94,14 @@
 %% optional LLM capabilities available to external clients.
 %% @end
 -spec expand(binary()) -> [binary()].
-expand(Query) when byte_size(Query) < 25 ->
-    [Query | [K || K <- fallback_topics(Query), K =/= Query]];
+%% Query expansion is HF/local only (no LLM). The old LLM path asked
+%% ollama for sub-queries per query, and `call_handler_timeout/4' kills
+%% only the Erlang waiter on timeout -- ollama keeps generating the
+%% killed request server-side, starving this CPU-bound VM (slowing the
+%% hf rerank and every concurrent query). `agent_planner' is the opt-in
+%% LLM expansion slot when that trade-off is wanted.
 expand(Query) ->
-    Conf   = read_llm_conf(),
-    Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
-               "this query. Reply ONLY with a raw JSON array of strings, "
-               "no markdown, no explanation.\n"
-               "Example: [\"term one\", \"term two\"]\n\n"
-               "Query: ", Query/binary>>,
-    HandlerConf = handler_conf(
-        maps:get(provider, Conf, <<"mistral">>),
-        Conf,
-        <<"You extract search keywords. Reply only with a JSON array of strings.">>
-    ),
-    SubQueries = case call_handler_timeout(maps:get(provider, Conf, <<"mistral">>),
-                                   Prompt, HandlerConf, llm_timeout(Conf)) of
-        {ok, Text} -> case parse_json_list(Text) of [] -> fallback_topics(Query); Lst -> Lst end;
-        _          -> fallback_topics(Query)
-    end,
-    Deduped = lists:usort(SubQueries),
-    [Query | lists:delete(Query, Deduped)].
+    [Query | [K || K <- fallback_topics(Query), K =/= Query]].
 
 %% @private Run an LLM handler with a hard timeout so a slow or unavailable
 %% provider (e.g. ollama down) falls back to topic extraction instead of

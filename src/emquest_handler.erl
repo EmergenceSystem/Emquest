@@ -594,12 +594,33 @@ maybe_cache(Query, FinalSids, ItemsBySid) ->
 %%
 %% Returns `[{Sid, RawItem, RankInSource, SubQuery, Trust}]' in arrival order.
 %% @end
+%% Cold-query fan-out cutoff. Rather than wait the full per-agent HTTP
+%% budget for every worker, once a quorum has answered the stragglers get
+%% only a short grace, capped by a hard overall deadline — one slow filter
+%% no longer drags the whole query to the 8s timeout.
+-define(COLLECT_HARD_MS,  8000).
+-define(COLLECT_GRACE_MS, 1200).
+-define(COLLECT_QUORUM,   0.75).
+
 -spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
                                list(), non_neg_integer()) ->
     [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}].
-collect_disco_streaming(0, _Req, Acc, _Counter) ->
+collect_disco_streaming(Total, Req, Acc, Counter) ->
+    collect_loop(Total, Total, Req, Acc, Counter,
+                 erlang:monotonic_time(millisecond), undefined).
+
+collect_loop(0, _Total, _Req, Acc, _Counter, _Start, _QAt) ->
     lists:reverse(Acc);
-collect_disco_streaming(Remaining, Req, Acc, Counter) ->
+collect_loop(Remaining, Total, Req, Acc, Counter, Start, QAt0) ->
+    Received = Total - Remaining,
+    Now      = erlang:monotonic_time(millisecond),
+    HardLeft = max(0, ?COLLECT_HARD_MS - (Now - Start)),
+    QuorumMet = Total > 0 andalso Received >= trunc(Total * ?COLLECT_QUORUM),
+    QAt = case {QuorumMet, QAt0} of {true, undefined} -> Now; _ -> QAt0 end,
+    Wait = case QAt of
+               undefined -> HardLeft;
+               _ -> max(0, min(HardLeft, (QAt + ?COLLECT_GRACE_MS) - Now))
+           end,
     receive
         {disco_result, _AnyPid, Tag, SubQuery, Items, Trust} ->
             sse(Req, status, iolist_to_binary([
@@ -611,10 +632,11 @@ collect_disco_streaming(Remaining, Req, Acc, Counter) ->
                 sse_item(Req, Ctr, NormItem),
                 {[{Ctr, Item, Rank, SubQuery, Trust} | A], Ctr + 1}
             end, {Acc, Counter}, lists:zip(lists:seq(0, length(Items) - 1), Items)),
-            collect_disco_streaming(Remaining - 1, Req, NewAcc, NewCounter)
-    after 8000 ->
-        logger:warning("[emquest] disco timeout, ~p process(es) did not respond",
-                       [Remaining]),
+            collect_loop(Remaining - 1, Total, Req, NewAcc, NewCounter, Start, QAt)
+    after Wait ->
+        (Remaining > 0) andalso
+            logger:notice("[emquest] collect cutoff: ~p/~p worker(s) pending "
+                          "after ~pms", [Remaining, Total, Now - Start]),
         lists:reverse(Acc)
     end.
 
