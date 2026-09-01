@@ -466,7 +466,7 @@ function appendCard(item, topicIndex) {
     card.className = `drift-card active-topic-${topicIndex % 5}`;
     card.style.animationDelay = `${Math.min((totalItems % 10) * 40, 300)}ms`;
     card.dataset.url = item.url;
-    card.dataset.mtype = item.media_type || 'text';
+    card.dataset.mtype = item.doc_type ? 'document' : (item.media_type || 'text');
     {
         const bar = document.getElementById('drift-typebar');
         if (bar) {
@@ -744,10 +744,11 @@ async function persistDriftTypes() {
   try {
     const bar = document.getElementById('drift-typebar');
     if (!bar) return;
-    const vals = [...bar.querySelectorAll('input')].filter(c => c.checked).map(c => c.value);
+    const map = {};
+    bar.querySelectorAll('input').forEach(c => { map[c.value] = c.checked; });
     const db = await _mtDbOpen();
     await new Promise(res => {
-      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(vals, _MT_KEY);
+      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(map, _MT_KEY);
       req.onsuccess = () => res(); req.onerror = () => res();
     });
   } catch (_) {}
@@ -760,8 +761,15 @@ async function restoreDriftTypes() {
       req.onsuccess = () => res(req.result); req.onerror = () => res(undefined);
     });
     const bar = document.getElementById('drift-typebar');
-    if (!bar || !Array.isArray(vals)) return;
-    bar.querySelectorAll('input').forEach(c => { c.checked = vals.includes(c.value); });
+    if (!bar || vals == null) return;
+    const legacy = ['text', 'image', 'audio', 'video'];
+    if (Array.isArray(vals)) {
+      bar.querySelectorAll('input').forEach(c => {
+        c.checked = vals.includes(c.value) || !legacy.includes(c.value);
+      });
+    } else {
+      bar.querySelectorAll('input').forEach(c => { c.checked = vals[c.value] !== false; });
+    }
     applyDriftFilter();
   } catch (_) {}
 }

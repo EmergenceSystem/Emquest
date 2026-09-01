@@ -343,7 +343,7 @@ function buildCard(item, sid, pos) {
     const li = document.createElement('li');
     li.className = `item-card score-${item.score ?? 0}`;
     li.dataset.sid = sid;
-    li.dataset.mtype = item.media_type || 'text';
+    li.dataset.mtype = item.doc_type ? 'document' : (item.media_type || 'text');
     li.style.animationDelay = `${Math.min(pos * 50, 400)}ms`;
 
     li.innerHTML = buildCardBody(item, pos);
@@ -625,10 +625,11 @@ async function persistMediaTypes() {
   try {
     const tf = document.getElementById('type-filters');
     if (!tf) return;
-    const vals = [...tf.querySelectorAll('input')].filter(c => c.checked).map(c => c.value);
+    const map = {};
+    tf.querySelectorAll('input').forEach(c => { map[c.value] = c.checked; });
     const db = await _mtDbOpen();
     await new Promise(res => {
-      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(vals, _MT_KEY);
+      const req = db.transaction(_MT_STORE, 'readwrite').objectStore(_MT_STORE).put(map, _MT_KEY);
       req.onsuccess = () => res(); req.onerror = () => res();
     });
   } catch (_) {}
@@ -640,10 +641,20 @@ async function restoreMediaTypes() {
       const req = db.transaction(_MT_STORE, 'readonly').objectStore(_MT_STORE).get(_MT_KEY);
       req.onsuccess = () => res(req.result); req.onerror = () => res(undefined);
     });
-    if (!Array.isArray(vals)) return;
+    if (vals == null) return;
     const tf = document.getElementById('type-filters');
     if (!tf) return;
-    tf.querySelectorAll('input').forEach(c => { c.checked = vals.includes(c.value); });
+    const legacy = ['text', 'image', 'audio', 'video'];
+    if (Array.isArray(vals)) {
+      /* old format: a list of checked values; checkboxes added later
+         (e.g. document) weren't options then, so default them checked. */
+      tf.querySelectorAll('input').forEach(c => {
+        c.checked = vals.includes(c.value) || !legacy.includes(c.value);
+      });
+    } else {
+      /* new format: {value: checked}; a missing key defaults checked. */
+      tf.querySelectorAll('input').forEach(c => { c.checked = vals[c.value] !== false; });
+    }
     applyTypeFilter();
   } catch (_) {}
 }
