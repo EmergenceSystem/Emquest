@@ -56,5 +56,7 @@
   <<"coingecko_filter">> => <<"cryptocurrency prices, coins, tokens, market cap, crypto market data, such as bitcoin ethereum solana">>,
   <<"opensky_filter">> => <<"live flights and aircraft positions in real time, planes in the air right now, callsign altitude speed, flight tracking like flightradar, such as Air France Lufthansa">>,
   <<"airplanes_live_filter">> => <<"live aircraft tracking by callsign from ADS-B, real-time planes and flight positions">>,
-  <<"iss_filter">> => <<"live position of the International Space Station right now, where is the ISS, space station orbit, satellite tracking">>
+  <<"iss_filter">> => <<"live position of the International Space Station right now, where is the ISS, space station orbit, satellite tracking">>,
+  <<"hal_filter">> => <<"open-access research papers and theses as downloadable PDF from HAL, French and international open science archive, scientific documents">>,
+  <<"europepmc_filter">> => <<"open-access biomedical and medical research papers as PDF from Europe PMC, health, diseases, clinical studies, such as cancer immunotherapy">>
 }.

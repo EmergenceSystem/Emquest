@@ -737,7 +737,11 @@ normalise_item(Item) ->
     Ips   = first_defined(Props, [<<"ips">>],                      null),
     Base0 = #{<<"label">> => Label, <<"value">> => Value,
               <<"score">> => Score, <<"type">>  => Type},
-    Base  = add_media(Base0, Props),
+    Base1 = add_media(Base0, Props),
+    Base  = case maps:get(<<"doc_type">>, Props, undefined) of
+                D when is_binary(D), byte_size(D) > 0 -> Base1#{<<"doc_type">> => D};
+                _ -> Base1
+            end,
     case {Url, Ips} of
         {null, [_|_]} -> Base#{<<"ips">>  => Ips};
         {null, _}     -> Base;

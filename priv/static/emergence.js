@@ -374,7 +374,7 @@ function buildCard(item, sid, pos) {
         const url = safeUrl(item.url);
         if (url) {
             li.classList.add('item-card--link');
-            const kind = docKind(url);
+            const kind = item.doc_type || docKind(url);
             if (kind) li.classList.add('item-card--doc');
             li.addEventListener('click', e => {
                 if (e.target.closest('a')) return; /* let native link work */
