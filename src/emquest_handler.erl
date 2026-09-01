@@ -558,10 +558,28 @@ run_pipeline_full(Query, Req) ->
         _ ->
             {SortedSids, ScoresMap}
     end,
-    sse_reorder(Req, FinalSids, FinalScores),
-    maybe_cache(Query, FinalSids, ItemsBySid),
+    FinalSids2 = apply_mmr(FinalSids, maps:get(embeddings, CtxRerank, #{})),
+    sse_reorder(Req, FinalSids2, FinalScores),
+    maybe_cache(Query, FinalSids2, ItemsBySid),
 
     cowboy_req:stream_body(<<>>, fin, Req).
+
+%% @private Diversify the head that has embeddings (MMR); append the rest.
+apply_mmr(Sids, Emb) when map_size(Emb) > 0, is_list(Sids) ->
+    case mmr_on() of
+        false -> Sids;
+        true ->
+            {Head, Tail} = lists:split(min(length(Sids), map_size(Emb)), Sids),
+            emquest_rank:mmr(Head, Emb, emquest_rank:mmr_lambda()) ++ Tail
+    end;
+apply_mmr(Sids, _Emb) -> Sids.
+
+%% @private [rank] mmr on/off, default on.
+mmr_on() ->
+    case maps:get("mmr", emquest_rank:conf(), "on") of
+        "off" -> false;
+        _     -> true
+    end.
 
 %% @private
 %% @doc Replay a cached, final-ordered item list as the SSE stream a
