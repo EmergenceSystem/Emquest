@@ -532,7 +532,7 @@ run_pipeline_full(Query, Req) ->
     logger:notice("[emquest] ~p result(s) collected (~p workers)",
                   [length(TaggedItems), TotalWorkers]),
 
-    {SortedSids, ScoresMap} = aggregate_and_rank(TaggedItems, SubQueries, QueryVec),
+    {SortedSids, ScoresMap} = aggregate_and_rank(Query, TaggedItems, QueryVec),
 
     %% Step 6 — LLM re-rank of the top-N via the meta-agent registry's
     %% `rerank' phase (`agent_judge'). `TaggedItems' has one entry per
@@ -665,117 +665,10 @@ collect_loop(Remaining, Total, Req, Acc, Counter, Start, QAt0) ->
 %%   ScoresMap  — #{<<"Sid">> => FinalScore} for all representatives
 %% @end
 %%--------------------------------------------------------------------
--spec aggregate_and_rank(
-        [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}],
-        [binary()], binary()) ->
+-spec aggregate_and_rank(binary(), list(), binary()) ->
     {[non_neg_integer()], map()}.
-aggregate_and_rank(TaggedItems, SubQueries, QueryVec) ->
-    %% Group by dedup key; preserve first-streamed (lowest Sid) as representative.
-    Groups = lists:foldl(fun({Sid, Item, Rank, SubQ, Trust}, Acc) ->
-        Key   = dedup_key(Item),
-        Entry = {Sid, Item, Rank, SubQ, Trust},
-        maps:update_with(Key, fun(Existing) -> [Entry | Existing] end,
-                         [Entry], Acc)
-    end, #{}, lists:reverse(TaggedItems)),  %% reverse so foldl keeps lowest Sid first
-
-    %% Score each group.
-    Scored = maps:fold(fun(_Key, Group, Acc) ->
-        {RepSid, _RepItem, _, _, _} = hd(Group),
-
-        %% Occurrence breadth — how many source batches returned this URL.
-        Occ = length(Group),
-
-        %% Trust-weighted RRF — a trusted source's rank-1 beats an unknown's.
-        RRF = lists:sum([Trust / (R + 1 + 60) || {_, _, R, _, Trust} <- Group]),
-
-        %% Sub-query coverage — how many distinct sub-queries this item satisfies.
-        SubQs    = sets:from_list([SQ || {_, _, _, SQ, _} <- Group], [{version, 2}]),
-        Coverage = sets:size(SubQs),
-
-        %% Semantic vector similarity — item text vs query vector.
-        VecScore = lists:max([item_vec_score(QueryVec, I) || {_, I, _, _, _} <- Group]),
-
-        %% How many distinct query words actually appear in this item's
-        %% text/url (title + resume + url). This dominates ranking so a
-        %% result matching more of the query rises to the top; the other
-        %% signals only break ties (search-engine style).
-        TextCov = lists:max([text_coverage(SubQueries, I)
-                             || {_, I, _, _, _} <- Group]),
-        Score = TextCov * 10000 + Coverage * 1000 + Occ * 50
-                + RRF * 100 + VecScore * 20,
-        [{RepSid, Score} | Acc]
-    end, [], Groups),
-
-    %% Sort best score first.
-    Sorted     = lists:sort(fun({_, A}, {_, B}) -> A >= B end, Scored),
-    SortedSids = [S || {S, _} <- Sorted],
-    ScoresMap  = maps:from_list(
-        [{integer_to_binary(S), Sc} || {S, Sc} <- Sorted]),
-    {SortedSids, ScoresMap}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc Extract the dedup key from a raw result item.
-%%
-%% Mirrors the logic previously in deduplicate_tagged/1.
-%% @end
-%%--------------------------------------------------------------------
--spec dedup_key(map()) -> term().
-dedup_key(Item) ->
-    Props = maps:get(<<"properties">>, Item, Item),
-    Url   = maps:get(<<"url">>, Props, <<>>),
-    Label = maps:get(<<"label">>, Item, <<>>),
-    case Url of
-        <<>> when Label =/= <<>> -> {label, Label};
-        <<>>                     -> {unique, erlang:unique_integer()};
-        _                        -> {url, Url}
-    end.
-
-%%====================================================================
-%% Relevance: query-term coverage
-%%====================================================================
-
-%% @private Count distinct query words present in an item's text/url.
--spec text_coverage([binary()], map()) -> non_neg_integer().
-text_coverage(SubQueries, Item) ->
-    Hay = item_haystack(Item),
-    length([T || T <- query_terms(SubQueries),
-                 binary:match(Hay, T) =/= nomatch]).
-
-%% @private Distinct significant words of the original query (its first
-%% element in the expanded list), lower-cased, length >= 2.
--spec query_terms([binary()]) -> [binary()].
-query_terms([]) -> [];
-query_terms([Query | _]) ->
-    Parts = binary:split(hay_lower(Query),
-        [<<" ">>,<<",">>,<<".">>,<<";">>,<<":">>,<<"?">>,<<"!">>,
-         <<"(">>,<<")">>,<<"/">>,<<"-">>,<<"'">>],
-        [global, trim_all]),
-    lists:usort([P || P <- Parts, byte_size(P) >= 2]).
-
-%% @private Lower-cased title + resume + url of an item, for matching.
--spec item_haystack(map()) -> binary().
-item_haystack(Item) ->
-    Props = maps:get(<<"properties">>, Item, Item),
-    Title = first_defined(Props, [<<"title">>, <<"label">>, <<"domain">>], <<>>),
-    Val   = first_defined(Props, [<<"resume">>, <<"value">>, <<"description">>], <<>>),
-    Url   = first_defined(Props, [<<"url">>], <<>>),
-    hay_lower(iolist_to_binary([to_bin_safe(Title), <<" ">>,
-                                to_bin_safe(Val), <<" ">>,
-                                to_bin_safe(Url)])).
-
--spec to_bin_safe(term()) -> binary().
-to_bin_safe(B) when is_binary(B) -> B;
-to_bin_safe(L) when is_list(L)   -> case unicode:characters_to_binary(L) of
-                                        Bin when is_binary(Bin) -> Bin; _ -> <<>> end;
-to_bin_safe(_)                   -> <<>>.
-
--spec hay_lower(binary()) -> binary().
-hay_lower(B) ->
-    case unicode:characters_to_binary(string:lowercase(B)) of
-        Bin when is_binary(Bin) -> Bin;
-        _ -> B
-    end.
+aggregate_and_rank(Query, TaggedItems, QueryVec) ->
+    emquest_rank:rank(Query, TaggedItems, QueryVec).
 
 %%====================================================================
 %% Item normalisation
@@ -969,28 +862,7 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
 %% Returns a float in [-1.0, 1.0]; higher means more semantically similar.
 %% Returns 0.0 when the item has no extractable text.
 %% @end
--spec item_vec_score(binary(), map()) -> float().
-item_vec_score(QueryVec, RawItem) ->
-    Props = maps:get(<<"properties">>, RawItem, RawItem),
-    Words = [V || Key <- [<<"title">>, <<"label">>, <<"resume">>,
-                           <<"value">>, <<"description">>],
-                  V   <- [maps:get(Key, Props, <<>>)],
-                  is_binary(V), byte_size(V) > 0],
-    case Words of
-        [] -> 0.0;
-        _  ->
-            ItemVec = em_filter_vec:from_capabilities(Words),
-            dot_product(QueryVec, ItemVec)
-    end.
-
-%% @private
-%% @doc Dot product of two f32 little-endian binary vectors.
-%% @end
--spec dot_product(binary(), binary()) -> float().
-dot_product(A, B) ->
-    FA = [F || <<F:32/float-little>> <= A],
-    FB = [F || <<F:32/float-little>> <= B],
-    lists:foldl(fun({X, Y}, Acc) -> Acc + X * Y end, 0.0, lists:zip(FA, FB)).
+%% (item_vec_score/dot_product moved into emquest_rank as hash_vec/dot_prod)
 
 %%====================================================================
 %% Preview fetch
