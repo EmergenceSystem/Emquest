@@ -516,6 +516,18 @@ a.item-title:hover,
         border-top: 1px solid var(--border);
     }
     .main--panel-open { max-width: var(--max-w); margin-right: auto; padding-bottom: calc(38vh + 3rem); }
+
+    /* Media cards: stack the image on top, text full-width below (was a
+       cramped thumbnail+text row on narrow screens). */
+    .media-card { flex-direction: column; gap: 8px; }
+    .media-thumb-wrap { width: 100%; }
+    .media-thumb, .media-thumb--placeholder { width: 100%; height: 190px; }
+    .media-thumb--audio { width: 56px; height: 56px; }
+    .media-meta { width: 100%; }
+
+    /* Tighter result cards + filter row on mobile. */
+    .item-card { padding: 0.85rem 0.95rem; }
+    .type-filters { gap: 12px; }
 }
 
 /* ── velora image media ─────────────────────────────────────────── */
