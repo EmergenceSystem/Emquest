@@ -619,7 +619,7 @@ maybe_cache(Query, FinalSids, ItemsBySid) ->
 -define(COLLECT_HARD_MS,  8000).
 -define(COLLECT_GRACE_MS, 1200).
 -define(COLLECT_QUORUM,   0.75).
--define(PROGRESSIVE_MS,   400).
+-define(PROGRESSIVE_MS,   700).
 
 -spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
                                binary(), binary()) ->

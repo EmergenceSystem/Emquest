@@ -729,3 +729,6 @@ a.item-title:hover,
 /* result count on the media-type filter line */
 .tf-count { margin-left: auto; color: var(--green); font-size: 12px;
             font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+
+/* query highlight */
+mark { background: rgba(61,220,132,0.22); color: #eafff3; padding: 0 2px; border-radius: 3px; }

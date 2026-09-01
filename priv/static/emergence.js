@@ -280,17 +280,25 @@ function handleEvent(event) {
             /* FLIP: play each card from its old position to the new one (Web
                Animations API, so it never fights the cardIn CSS animation). */
             requestAnimationFrame(() => {
+                const vh = window.innerHeight || 800;
                 streamCards.forEach((card) => {
                     const prev = first.get(card);
                     if (!prev || !card.isConnected) return;
                     const now = card.getBoundingClientRect();
+                    /* Only animate cards near the viewport — off-screen motion is
+                       invisible and animating all ~200 at once is what felt janky. */
+                    if (now.bottom < -vh * 0.3 || now.top > vh * 1.3) return;
                     const dx = prev.left - now.left, dy = prev.top - now.top;
                     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
-                    card.animate(
+                    const anim = card.animate(
                         [{ transform: `translate(${dx}px, ${dy}px)` },
                          { transform: 'translate(0, 0)' }],
-                        { duration: 300, easing: 'cubic-bezier(0.2,0.8,0.2,1)' }
+                        { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
                     );
+                    /* Replace any in-flight FLIP so rapid reorders don't stack. */
+                    if (card._flip) card._flip.cancel();
+                    card._flip = anim;
+                    anim.onfinish = () => { if (card._flip === anim) card._flip = null; };
                 });
             });
 
