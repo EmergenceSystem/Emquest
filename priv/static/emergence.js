@@ -712,6 +712,7 @@ function docKind(url) {
     if (u.endsWith('.docx')) return 'docx';
     if (u.endsWith('.xlsx') || u.endsWith('.xls')) return 'xlsx';
     if (u.endsWith('.csv')) return 'csv';
+    if (u.includes('/pdf/')) return 'pdf';   /* extensionless PDFs (arxiv) */
     return null;
 }
 
