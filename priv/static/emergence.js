@@ -235,47 +235,78 @@ function handleEvent(event) {
             const list   = document.getElementById('results-list');
             const sids   = event.sids   || [];
             const scores = event.scores || {};
+            /* Progressive passes send final:false; the last one (and legacy) finalize. */
+            const isFinal = event.final !== false;
 
-            /* Safety: empty sids = LLM failed, keep cards as-is */
+            /* Safety: empty sids = ranking failed, keep cards as-is */
             if (sids.length === 0) break;
 
-            /* Hide deduped items */
-            streamCards.forEach((card, sid) => {
-                if (!sids.includes(sid)) {
-                    card.classList.add('card-removed');
-                    setTimeout(() => card.remove(), 350);
-                }
+            /* FLIP: record card positions before the DOM moves. */
+            const first = new Map();
+            streamCards.forEach((card) => {
+                if (card.isConnected) first.set(card, card.getBoundingClientRect());
             });
 
-            /* Reorder DOM + update score accent, re-number */
+            /* On the final reorder, hide deduped items (not in sids). */
+            if (isFinal) {
+                streamCards.forEach((card, sid) => {
+                    if (!sids.includes(sid)) {
+                        card.classList.add('card-removed');
+                        setTimeout(() => card.remove(), 350);
+                    }
+                });
+            }
+
+            /* Reorder DOM + update score accent + re-number. */
             sids.forEach((sid, pos) => {
                 const card = streamCards.get(sid);
                 if (!card || !list) return;
 
-                /* Keys come as strings from JSON (integer_to_binary in Erlang) */
                 const score = scores[String(sid)] ?? 0;
                 card.dataset.score = score;
-                card.className = card.className.replace(/\bscore-\d\b/g, '').trim();
-                card.classList.add(`score-${score}`);
+                /* Only the cross-encoder's 0..3 integer scores drive the accent. */
+                if (Number.isInteger(score)) {
+                    card.className = card.className.replace(/\bscore-\d\b/g, '').trim();
+                    card.classList.add(`score-${score}`);
+                }
 
-                /* Update index number */
                 const idx = card.querySelector('.item-index');
                 if (idx) idx.textContent = String(pos + 1).padStart(2, '0');
 
                 list.appendChild(card); /* move to end in ranked order */
             });
 
-            /* Finalise the progress bar + count, then fade it out */
-            finishProgress();
+            /* FLIP: play each card from its old position to the new one (Web
+               Animations API, so it never fights the cardIn CSS animation). */
+            requestAnimationFrame(() => {
+                streamCards.forEach((card) => {
+                    const prev = first.get(card);
+                    if (!prev || !card.isConnected) return;
+                    const now = card.getBoundingClientRect();
+                    const dx = prev.left - now.left, dy = prev.top - now.top;
+                    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+                    card.animate(
+                        [{ transform: `translate(${dx}px, ${dy}px)` },
+                         { transform: 'translate(0, 0)' }],
+                        { duration: 300, easing: 'cubic-bezier(0.2,0.8,0.2,1)' }
+                    );
+                });
+            });
+
             applyTypeFilter();
-            setTimeout(applyTypeFilter, 400);
-            const log = document.getElementById('progress-log');
-            if (log) {
-                setTimeout(() => {
-                    log.style.transition = 'opacity 1.2s ease';
-                    log.style.opacity    = '0';
-                    setTimeout(() => log.remove(), 1200);
-                }, 2000);
+
+            /* Finalise the progress bar only on the final reorder. */
+            if (isFinal) {
+                finishProgress();
+                setTimeout(applyTypeFilter, 400);
+                const log = document.getElementById('progress-log');
+                if (log) {
+                    setTimeout(() => {
+                        log.style.transition = 'opacity 1.2s ease';
+                        log.style.opacity    = '0';
+                        setTimeout(() => log.remove(), 1200);
+                    }, 2000);
+                }
             }
             break;
         }

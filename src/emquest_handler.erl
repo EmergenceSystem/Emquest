@@ -668,7 +668,7 @@ maybe_progressive(Req, Acc, Query, QVec, LastEmit, Now) ->
         true ->
             case catch emquest_rank:rank(Query, lists:reverse(Acc), QVec) of
                 {Sids, Scores} when is_list(Sids), Sids =/= [] ->
-                    sse_reorder(Req, Sids, Scores);
+                    sse_reorder(Req, Sids, Scores, false);
                 _ -> ok
             end,
             Now;
@@ -1141,9 +1141,14 @@ sse_item(Req, Sid, Item) ->
 %% @end
 -spec sse_reorder(cowboy_req:req(), [non_neg_integer()], map()) -> ok.
 sse_reorder(Req, Sids, ScoresMap) ->
+    sse_reorder(Req, Sids, ScoresMap, true).
+
+%% @private Reorder event; Final=false marks a progressive (mid-fetch) pass.
+sse_reorder(Req, Sids, ScoresMap, Final) ->
     Payload = iolist_to_binary(json:encode(#{
         <<"type">>   => <<"reorder">>,
         <<"sids">>   => Sids,
-        <<"scores">> => ScoresMap
+        <<"scores">> => ScoresMap,
+        <<"final">>  => Final
     })),
     cowboy_req:stream_body(<<"data: ", Payload/binary, "\n\n">>, nofin, Req).
