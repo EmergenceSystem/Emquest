@@ -120,6 +120,7 @@ let streamCards = new Map();
 async function submitQuery() {
     const query = queryInput?.value.trim();
     if (!query) return;
+    setHighlightQuery(query);
 
     /* An image URL in the message is handled by velora, not the search pipeline. */
     const imgUrl = extractImageUrl(query);
@@ -391,9 +392,9 @@ function buildCardBody(item, pos) {
             body = `
                 <div class="item-web">
                     <a href="${escAttr(url)}" target="_blank" rel="noopener"
-                       class="item-title">${escHtml(item.label)}</a>
+                       class="item-title">${highlight(item.label)}</a>
                     <span class="item-url">${escHtml(item.url)}</span>
-                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                    ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                 </div>
                 <span class="item-arrow">↗</span>
             `;
@@ -403,7 +404,7 @@ function buildCardBody(item, pos) {
                 <div class="item-web">
                     <a href="${escAttr(url)}" target="_blank" rel="noopener"
                        class="item-url item-url--hero">${escHtml(item.url)}</a>
-                    ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                    ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                 </div>
                 <span class="item-arrow">↗</span>
             `;
@@ -416,11 +417,11 @@ function buildCardBody(item, pos) {
         body = `
             <div class="item-dns">
                 <div class="item-dns-header">
-                    <span class="item-domain">${escHtml(item.label)}</span>
+                    <span class="item-domain">${highlight(item.label)}</span>
                     <span class="dns-badge">DNS</span>
                 </div>
                 <div class="ip-list">${badges}</div>
-                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
             </div>
         `;
     } else {
@@ -428,8 +429,8 @@ function buildCardBody(item, pos) {
         const label = (item.label && item.label !== 'Result') ? item.label : null;
         body = `
             <div class="item-generic">
-                ${label ? `<span class="item-title">${escHtml(label)}</span>` : ''}
-                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${label ? `<span class="item-title">${highlight(label)}</span>` : ''}
+                ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
             </div>
         `;
     }
@@ -443,7 +444,7 @@ function buildCardBody(item, pos) {
 /* ── Media cards ────────────────────────────────────────── */
 function buildMediaBody(item) {
     const t     = item.media_type;
-    const title = (item.label && item.label !== 'Result') ? escHtml(item.label) : '';
+    const title = (item.label && item.label !== 'Result') ? highlight(item.label) : '';
     const foot  = mediaFooter(item);
     const thumb = item.thumbnail ? safeUrl(item.thumbnail) : '';
 
@@ -457,7 +458,7 @@ function buildMediaBody(item) {
                          onerror="this.remove()">` : ''}
                     <div class="media-meta">
                         ${title ? `<span class="item-title">${title}</span>` : ''}
-                        ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                        ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                         ${foot}
                     </div>
                 </div>
@@ -495,7 +496,7 @@ function buildMediaBody(item) {
             <div class="media-thumb-wrap">${thumbHtml}${play}${durBadge}</div>
             <div class="media-meta">
                 ${title ? `<span class="item-title">${title}</span>` : ''}
-                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                 ${foot}
             </div>
         </div>`;
@@ -729,6 +730,37 @@ function escHtml(s) {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+/* ── Query-term highlighting ──────────────────────────────────────── */
+/* Length-preserving fold (1 folded char per input char) so <mark>
+   offsets computed on the folded text align with the escaped text. */
+function _fold(s) {
+    return [...String(s == null ? '' : s)]
+        .map(c => (c.normalize('NFD')[0] || c).toLowerCase()).join('');
+}
+let _hlWords = [];
+function setHighlightQuery(q) {
+    _hlWords = _fold(q).split(/\s+/).filter(w => w.length >= 2);
+}
+function highlight(text) {
+    if (text == null || text === '' || _hlWords.length === 0) return escHtml(text || '');
+    const esc    = escHtml(text);
+    const folded = _fold(esc);          /* same length as esc (1:1) */
+    const marks  = [];
+    for (const w of _hlWords) {
+        let i = 0;
+        while ((i = folded.indexOf(w, i)) !== -1) { marks.push([i, i + w.length]); i += w.length; }
+    }
+    if (marks.length === 0) return esc;
+    marks.sort((a, b) => a[0] - b[0]);
+    let out = '', cur = 0;
+    for (const [a, b] of marks) {
+        if (a < cur) continue;
+        out += esc.slice(cur, a) + '<mark>' + esc.slice(a, b) + '</mark>';
+        cur = b;
+    }
+    return out + esc.slice(cur);
 }
 function escAttr(s) { return s ? String(s).replace(/"/g, '%22') : '#'; }
 function safeUrl(s) {
