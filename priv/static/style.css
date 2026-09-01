@@ -744,3 +744,28 @@ a.item-title:hover,
 
 /* query highlight */
 mark { background: rgba(61,220,132,0.22); color: #eafff3; padding: 0 2px; border-radius: 3px; }
+
+/* doc viewer */
+.lightbox-inner { position: relative; width: min(1000px, 94vw); height: min(88vh, 900px);
+    display: flex; flex-direction: column; background: #0f1115; border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; }
+.lightbox .lightbox-img { max-width: 94vw; max-height: 88vh; width: auto; height: auto; }
+.lightbox:has(.lightbox-img) .lightbox-inner { width: auto; height: auto; background: none; border: none; }
+.lightbox-close { position: absolute; top: 8px; right: 10px; z-index: 5; width: 30px; height: 30px;
+    border: 1px solid var(--border); border-radius: 6px; background: rgba(0,0,0,.5);
+    color: var(--green); font-size: 15px; cursor: pointer; }
+.lightbox-close:hover { background: rgba(0,220,100,.15); }
+.lightbox-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.doc-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.doc-html { flex: 1; overflow: auto; padding: 24px 28px; background: #fff; color: #111;
+    font: 15px/1.6 system-ui, sans-serif; }
+.doc-html img { max-width: 100%; }
+.doc-sheet table { border-collapse: collapse; font-size: 13px; }
+.doc-sheet td, .doc-sheet th { border: 1px solid #ccc; padding: 3px 7px; white-space: nowrap; }
+.doc-loading, .doc-fallback { flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; color: var(--muted); padding: 24px; text-align: center; }
+.doc-bar { flex: 0 0 auto; padding: 8px 12px; border-top: 1px solid var(--border);
+    background: #0f1115; text-align: right; }
+.doc-open { color: var(--green); font-size: 13px; text-decoration: none; }
+.doc-open:hover { text-decoration: underline; }
+.item-card--doc .item-title::after { content: " \\1F4C4"; font-size: 0.9em; opacity: 0.7; }

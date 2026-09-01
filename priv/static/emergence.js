@@ -374,9 +374,12 @@ function buildCard(item, sid, pos) {
         const url = safeUrl(item.url);
         if (url) {
             li.classList.add('item-card--link');
+            const kind = docKind(url);
+            if (kind) li.classList.add('item-card--doc');
             li.addEventListener('click', e => {
                 if (e.target.closest('a')) return; /* let native link work */
-                window.open(url, '_blank', 'noopener');
+                if (kind) openDocViewer(url);
+                else window.open(url, '_blank', 'noopener');
             });
         }
     }
@@ -668,20 +671,101 @@ function applyTypeFilter() {
   if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
 
-function openLightbox(src) {
+function ensureLightbox() {
     if (!_lightbox) {
         _lightbox = document.createElement('div');
         _lightbox.id = 'media-lightbox';
         _lightbox.className = 'lightbox';
-        _lightbox.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">';
-        _lightbox.addEventListener('click', () => _lightbox.classList.remove('open'));
+        _lightbox.innerHTML =
+            '<div class="lightbox-inner">' +
+            '<button class="lightbox-close" aria-label="Close">\u2715</button>' +
+            '<div class="lightbox-body"></div></div>';
+        _lightbox.addEventListener('click', e => {
+            if (e.target === _lightbox || e.target.closest('.lightbox-close')) closeLightbox();
+        });
         document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && _lightbox) _lightbox.classList.remove('open');
+            if (e.key === 'Escape' && _lightbox) closeLightbox();
         });
         document.body.appendChild(_lightbox);
     }
-    _lightbox.querySelector('img').src = src;
+    return _lightbox.querySelector('.lightbox-body');
+}
+
+function closeLightbox() {
+    if (!_lightbox) return;
+    _lightbox.classList.remove('open');
+    const b = _lightbox.querySelector('.lightbox-body');
+    if (b) b.innerHTML = '';   /* stop iframes / free memory */
+}
+
+function openLightbox(src) {
+    const body = ensureLightbox();
+    body.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">';
+    body.querySelector('img').src = src;
     _lightbox.classList.add('open');
+}
+
+/* Detect a viewable document kind from a URL's extension. */
+function docKind(url) {
+    const u = (url || '').split('?')[0].split('#')[0].toLowerCase();
+    if (u.endsWith('.pdf')) return 'pdf';
+    if (u.endsWith('.docx')) return 'docx';
+    if (u.endsWith('.xlsx') || u.endsWith('.xls')) return 'xlsx';
+    if (u.endsWith('.csv')) return 'csv';
+    return null;
+}
+
+const _scripts = {};
+function loadScript(src) {
+    return _scripts[src] || (_scripts[src] = new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+    }));
+}
+
+/* In-app document viewer: PDF via the browser's native iframe viewer,
+   Word/Excel/CSV parsed client-side (mammoth / SheetJS). Falls back to
+   an "open original" link when the format is unsupported or the source
+   blocks cross-origin fetch (CORS). */
+async function openDocViewer(url) {
+    const kind = docKind(url);
+    const body = ensureLightbox();
+    _lightbox.classList.add('open');
+    const orig = '<a class="doc-open" href="' + escAttr(url) +
+                 '" target="_blank" rel="noopener">Open original \u2197</a>';
+
+    if (kind === 'pdf') {
+        body.innerHTML = '<iframe class="doc-frame" src="' + escAttr(url) +
+                         '"></iframe><div class="doc-bar">' + orig + '</div>';
+        return;
+    }
+
+    body.innerHTML = '<div class="doc-loading">Loading preview\u2026</div>';
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('http');
+        const ab = await resp.arrayBuffer();
+        if (kind === 'docx') {
+            await loadScript('/static/vendor/mammoth.browser.min.js');
+            const r = await window.mammoth.convertToHtml({ arrayBuffer: ab });
+            body.innerHTML = '<div class="doc-html">' + r.value +
+                             '</div><div class="doc-bar">' + orig + '</div>';
+        } else if (kind === 'xlsx' || kind === 'csv') {
+            await loadScript('/static/vendor/xlsx.full.min.js');
+            const wb = window.XLSX.read(ab, { type: 'array' });
+            const first = wb.Sheets[wb.SheetNames[0]];
+            const table = window.XLSX.utils.sheet_to_html(first);
+            body.innerHTML = '<div class="doc-html doc-sheet">' + table +
+                             '</div><div class="doc-bar">' + orig + '</div>';
+        } else {
+            throw new Error('unsupported');
+        }
+    } catch (e) {
+        body.innerHTML = '<div class="doc-fallback"><p>Can\'t preview this file here ' +
+            '(unsupported format, or the source blocks cross-origin access).</p>' +
+            orig + '</div>';
+    }
 }
 
 /* ================================================================== */
