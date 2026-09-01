@@ -53,5 +53,8 @@
   <<"met_filter">> => <<"artworks from the Metropolitan Museum of Art, paintings, sculptures, art history images, ancient and modern art, such as Van Gogh Egyptian">>,
   <<"openalex_filter">> => <<"scholarly research papers, academic works, scientific literature, citations, authors, journals, such as machine learning genomics climate">>,
   <<"datagouv_filter">> => <<"French open government data, public datasets, statistics, administrations, data.gouv.fr, donnees publiques francaises">>,
-  <<"coingecko_filter">> => <<"cryptocurrency prices, coins, tokens, market cap, crypto market data, such as bitcoin ethereum solana">>
+  <<"coingecko_filter">> => <<"cryptocurrency prices, coins, tokens, market cap, crypto market data, such as bitcoin ethereum solana">>,
+  <<"opensky_filter">> => <<"live flights and aircraft positions in real time, planes in the air right now, callsign altitude speed, flight tracking like flightradar, such as Air France Lufthansa">>,
+  <<"airplanes_live_filter">> => <<"live aircraft tracking by callsign from ADS-B, real-time planes and flight positions">>,
+  <<"iss_filter">> => <<"live position of the International Space Station right now, where is the ISS, space station orbit, satellite tracking">>
 }.
