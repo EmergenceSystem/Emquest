@@ -526,7 +526,7 @@ run_pipeline_full(Query, Req) ->
     ])),
 
     %% Step 4 — collect all results (disco + em_pop), streaming each item.
-    TaggedItems = collect_disco_streaming(TotalWorkers, Req, [], 0),
+    TaggedItems = collect_disco_streaming(TotalWorkers, Req, Query, QueryVec),
 
     %% Step 5 — aggregate: group by URL, rank by occ + trust-RRF + coverage + vec.
     logger:notice("[emquest] ~p result(s) collected (~p workers)",
@@ -601,17 +601,18 @@ maybe_cache(Query, FinalSids, ItemsBySid) ->
 -define(COLLECT_HARD_MS,  8000).
 -define(COLLECT_GRACE_MS, 1200).
 -define(COLLECT_QUORUM,   0.75).
+-define(PROGRESSIVE_MS,   400).
 
 -spec collect_disco_streaming(non_neg_integer(), cowboy_req:req(),
-                               list(), non_neg_integer()) ->
+                               binary(), binary()) ->
     [{non_neg_integer(), map(), non_neg_integer(), binary(), float()}].
-collect_disco_streaming(Total, Req, Acc, Counter) ->
-    collect_loop(Total, Total, Req, Acc, Counter,
-                 erlang:monotonic_time(millisecond), undefined).
+collect_disco_streaming(Total, Req, Query, QueryVec) ->
+    Now = erlang:monotonic_time(millisecond),
+    collect_loop(Total, Total, Req, [], 0, Now, undefined, Query, QueryVec, Now).
 
-collect_loop(0, _Total, _Req, Acc, _Counter, _Start, _QAt) ->
+collect_loop(0, _Total, _Req, Acc, _Counter, _Start, _QAt, _Q, _QVec, _LastEmit) ->
     lists:reverse(Acc);
-collect_loop(Remaining, Total, Req, Acc, Counter, Start, QAt0) ->
+collect_loop(Remaining, Total, Req, Acc, Counter, Start, QAt0, Query, QVec, LastEmit) ->
     Received = Total - Remaining,
     Now      = erlang:monotonic_time(millisecond),
     HardLeft = max(0, ?COLLECT_HARD_MS - (Now - Start)),
@@ -632,12 +633,36 @@ collect_loop(Remaining, Total, Req, Acc, Counter, Start, QAt0) ->
                 sse_item(Req, Ctr, NormItem),
                 {[{Ctr, Item, Rank, SubQuery, Trust} | A], Ctr + 1}
             end, {Acc, Counter}, lists:zip(lists:seq(0, length(Items) - 1), Items)),
-            collect_loop(Remaining - 1, Total, Req, NewAcc, NewCounter, Start, QAt)
+            NewLast = maybe_progressive(Req, NewAcc, Query, QVec, LastEmit, Now),
+            collect_loop(Remaining - 1, Total, Req, NewAcc, NewCounter, Start,
+                         QAt, Query, QVec, NewLast)
     after Wait ->
         (Remaining > 0) andalso
             logger:notice("[emquest] collect cutoff: ~p/~p worker(s) pending "
                           "after ~pms", [Remaining, Total, Now - Start]),
         lists:reverse(Acc)
+    end.
+
+%% @private Emit a light progressive reorder at most every ?PROGRESSIVE_MS,
+%% re-scoring the accumulated items with the fast hybrid scorer (no hf).
+maybe_progressive(Req, Acc, Query, QVec, LastEmit, Now) ->
+    case (Now - LastEmit) >= ?PROGRESSIVE_MS andalso progressive_on() of
+        true ->
+            case catch emquest_rank:rank(Query, lists:reverse(Acc), QVec) of
+                {Sids, Scores} when is_list(Sids), Sids =/= [] ->
+                    sse_reorder(Req, Sids, Scores);
+                _ -> ok
+            end,
+            Now;
+        false ->
+            LastEmit
+    end.
+
+%% @private [rank] progressive on/off, default on.
+progressive_on() ->
+    case maps:get("progressive", emquest_rank:conf(), "on") of
+        "off" -> false;
+        _     -> true
     end.
 
 %%====================================================================
