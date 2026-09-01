@@ -269,6 +269,7 @@ async function loadBatch() {
     if (sentinel) sentinel.style.opacity = '1';
 
     const query = TOPICS[activeTopic];
+    setHighlightQuery(query);
     const topicIndex = activeTopic;
 
     try {
@@ -331,7 +332,7 @@ function fmtDur(s) {
 }
 function buildMediaBody(item) {
     const t     = item.media_type;
-    const title = (item.label && item.label !== 'Result') ? escHtml(item.label) : '';
+    const title = (item.label && item.label !== 'Result') ? highlight(item.label) : '';
     const foot  = mediaFooter(item);
     const thumb = item.thumbnail ? safeUrl(item.thumbnail) : '';
 
@@ -345,7 +346,7 @@ function buildMediaBody(item) {
                          onerror="this.remove()">` : ''}
                     <div class="media-meta">
                         ${title ? `<span class="item-title">${title}</span>` : ''}
-                        ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                        ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                         ${foot}
                     </div>
                 </div>
@@ -382,7 +383,7 @@ function buildMediaBody(item) {
             <div class="media-thumb-wrap">${thumbHtml}${play}${durBadge}</div>
             <div class="media-meta">
                 ${title ? `<span class="item-title">${title}</span>` : ''}
-                ${item.value ? `<p class="item-resume">${escHtml(item.value)}</p>` : ''}
+                ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
                 ${foot}
             </div>
         </div>`;
@@ -506,7 +507,7 @@ function appendCard(item, topicIndex) {
 
     card.innerHTML = `
         <div class="card-topic-tag">${escHtml(TOPICS[topicIndex])}</div>
-        <div class="card-title">${escHtml(label)}</div>
+        <div class="card-title">${highlight(label)}</div>
         <div class="card-url">${escHtml(item.url)}</div>
         <div class="card-preview loading" data-preview-url="${previewUrl}"></div>
         <button class="card-open-btn" aria-label="Open link" tabindex="0">↗</button>
@@ -681,6 +682,35 @@ function escHtml(s) {
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
         .replace(/'/g,'&#39;');
+}
+
+/* ── Query-term highlighting (shared logic with emergence.js) ─────── */
+function _fold(s) {
+    return [...String(s == null ? '' : s)]
+        .map(c => (c.normalize('NFD')[0] || c).toLowerCase()).join('');
+}
+let _hlWords = [];
+function setHighlightQuery(q) {
+    _hlWords = _fold(q).split(/\s+/).filter(w => w.length >= 2);
+}
+function highlight(text) {
+    if (text == null || text === '' || _hlWords.length === 0) return escHtml(text || '');
+    const esc    = escHtml(text);
+    const folded = _fold(esc);
+    const marks  = [];
+    for (const w of _hlWords) {
+        let i = 0;
+        while ((i = folded.indexOf(w, i)) !== -1) { marks.push([i, i + w.length]); i += w.length; }
+    }
+    if (marks.length === 0) return esc;
+    marks.sort((a, b) => a[0] - b[0]);
+    let out = '', cur = 0;
+    for (const [a, b] of marks) {
+        if (a < cur) continue;
+        out += esc.slice(cur, a) + '<mark>' + esc.slice(a, b) + '</mark>';
+        cur = b;
+    }
+    return out + esc.slice(cur);
 }
 function escAttr(s) { return s ? String(s).replace(/"/g,'%22') : '#'; }
 function hostnameOf(url) {

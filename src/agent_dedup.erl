@@ -34,8 +34,11 @@ run(#{sortedsids := Sids, items := ItemsBySid} = Ctx)
             Docs = [doc_text(maps:get(S, ItemsBySid, #{})) || S <- Head],
             case em_hf:embed_many(Docs) of
                 {ok, Vecs} when length(Vecs) =:= length(Head) ->
-                    Kept = greedy_dedup(lists:zip(Head, Vecs), threshold()),
-                    {ok, Ctx#{sortedsids => Kept ++ Tail}};
+                    Kept   = greedy_dedup(lists:zip(Head, Vecs), threshold()),
+                    EmbMap = maps:from_list(lists:zip(Head, Vecs)),
+                    Old    = maps:get(embeddings, Ctx, #{}),
+                    {ok, Ctx#{sortedsids  => Kept ++ Tail,
+                              embeddings  => maps:merge(Old, EmbMap)}};
                 _ -> skip
             end
     end;
