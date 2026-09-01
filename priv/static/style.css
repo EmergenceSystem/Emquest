@@ -768,4 +768,4 @@ mark { background: rgba(61,220,132,0.22); color: #eafff3; padding: 0 2px; border
     background: #0f1115; text-align: right; }
 .doc-open { color: var(--green); font-size: 13px; text-decoration: none; }
 .doc-open:hover { text-decoration: underline; }
-.item-card--doc .item-title::after { content: " \\1F4C4"; font-size: 0.9em; opacity: 0.7; }
+.item-card--doc .item-title::after { content: " 📄"; font-size: 0.9em; opacity: 0.7; }
