@@ -48,7 +48,7 @@
 -behaviour(cowboy_handler).
 
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
-         security_headers/1]).
+         security_headers/1, security_headers/2, app_script_extra/0]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -62,7 +62,7 @@ init(Req0, index) ->
             logger:error("[emquest] index.html read failed: ~p", [R]),
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
-    {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), index};
+    {ok, cowboy_req:reply(Code, security_headers(CT, app_script_extra()), Body, Req0), index};
 
 init(Req0, drift) ->
     Path = filename:join([code:priv_dir(emquest), "templates", "drift.html"]),
@@ -72,7 +72,7 @@ init(Req0, drift) ->
             logger:error("[emquest] drift.html read failed: ~p", [R]),
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
-    {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), drift};
+    {ok, cowboy_req:reply(Code, security_headers(CT, app_script_extra()), Body, Req0), drift};
 
 init(Req0, preview) ->
     QS  = cowboy_req:parse_qs(Req0),
@@ -1110,22 +1110,51 @@ nn(V)         -> V.
 
 %% @doc Response headers for HTML pages: strict CSP + hardening.
 %% `img-src` allows self + https (peer thumbnails are proxied/https only);
-%% no inline or third-party script is permitted. `style-src'/`font-src' carry
+%% no inline or third-party script is permitted beyond what `ExtraScriptSrc'
+%% (see `app_script_extra/0') explicitly allows. `style-src'/`font-src' carry
 %% an explicit allowance for fonts.googleapis.com/fonts.gstatic.com because
 %% every template (index/drift/network) links Google Fonts — without it the
-%% given base policy would silently break font loading on every HTML page.
+%% base policy would silently break font loading on every HTML page.
 -spec security_headers(binary()) -> map().
-security_headers(ContentType) ->
+security_headers(ContentType) -> security_headers(ContentType, <<>>).
+
+-spec security_headers(binary(), binary()) -> map().
+security_headers(ContentType, ExtraScriptSrc) ->
+    ScriptSrc = <<"script-src 'self'", ExtraScriptSrc/binary>>,
     #{<<"content-type">>            => ContentType,
       <<"content-security-policy">> =>
-          <<"default-src 'self'; script-src 'self'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+          <<"default-src 'self'; ", ScriptSrc/binary,
+            "; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
             "img-src 'self' https: data:; media-src 'self' https:; "
             "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,
       <<"x-content-type-options">>  => <<"nosniff">>,
       <<"x-frame-options">>         => <<"DENY">>,
       <<"referrer-policy">>         => <<"no-referrer">>}.
+
+%% @doc `script-src' allowance for index/drift only: the three known inline
+%% event-handler attribute VALUES that `priv/static/emergence.js' and
+%% `priv/static/drift.js' inject via `innerHTML' when rendering media cards:
+%%   - `this.remove()'         (broken audio-thumbnail `onerror')
+%%   - `mediaImgLoad(this)'    (media-thumbnail `onload')
+%%   - `mediaImgError(this)'   (media-thumbnail `onerror')
+%% `'unsafe-hashes'' + a SHA-256 hash of each exact string lets ONLY these
+%% three byte-for-byte handler bodies execute; any injected/altered handler
+%% won't match a hash and stays blocked. If those handler strings ever
+%% change in emergence.js/drift.js, the hashes here must be recomputed
+%% (`base64:encode(crypto:hash(sha256, <<"...">>))') or the page will
+%% silently drop the (now-mismatched) inline handler under CSP.
+%%
+%% This is a stopgap: the real fix is refactoring both files to bind
+%% `onload'/`onerror' via `addEventListener' after DOM insertion instead of
+%% as HTML attributes, which would let `script-src' drop `'unsafe-hashes''
+%% entirely. Deferred to a later, browser-verified task.
+-spec app_script_extra() -> binary().
+app_script_extra() ->
+    <<" 'unsafe-hashes' "
+      "'sha256-9f8ZK5epjuMsYtXFjPqrgJI0L4QOAUYmJdHtT+RSH/c=' "
+      "'sha256-TOw6vLmLs0u4zMNVcBtk9gKHhZZO21kuEodqgabawHo=' "
+      "'sha256-TbDMZVdV6kxJ0EgNOXAp1sqZKQW5XoGbNFW+9EWq+qg='">>.
 
 %% @private Self-contained health dashboard; fetches /health and renders.
 status_page() ->
