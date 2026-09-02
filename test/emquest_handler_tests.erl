@@ -27,3 +27,31 @@ normalise_item_non_media_unchanged_test() ->
     Item = emquest_handler:normalise_item(Raw),
     ?assertEqual(false, maps:is_key(<<"media_type">>, Item)),
     ?assertEqual(<<"http://x">>, maps:get(<<"url">>, Item)).
+
+sanitize_escapes_html_in_label_test() ->
+    In  = #{<<"properties">> => #{<<"title">> => <<"<script>alert(1)</script>">>,
+                                  <<"resume">> => <<"a & b < c">>}},
+    Out = emquest_handler:normalise_item(In),
+    ?assertEqual(<<"&lt;script&gt;alert(1)&lt;/script&gt;">>, maps:get(<<"label">>, Out)),
+    ?assertEqual(<<"a &amp; b &lt; c">>, maps:get(<<"value">>, Out)).
+
+sanitize_drops_javascript_url_test() ->
+    In  = #{<<"properties">> => #{<<"title">> => <<"x">>,
+                                  <<"url">>   => <<"javascript:alert(1)">>}},
+    Out = emquest_handler:normalise_item(In),
+    ?assertEqual(error, maps:find(<<"url">>, Out)).
+
+sanitize_keeps_http_url_test() ->
+    In  = #{<<"properties">> => #{<<"title">> => <<"x">>,
+                                  <<"url">>   => <<"https://example.com/p">>}},
+    Out = emquest_handler:normalise_item(In),
+    ?assertEqual(<<"https://example.com/p">>, maps:get(<<"url">>, Out)).
+
+sanitize_drops_bad_media_url_test() ->
+    In  = #{<<"properties">> => #{<<"title">> => <<"x">>,
+                                  <<"media_type">> => <<"image">>,
+                                  <<"media_url">>  => <<"data:image/png;base64,xxx">>,
+                                  <<"thumbnail">>  => <<"https://ok.example/t.png">>}},
+    Out = emquest_handler:normalise_item(In),
+    ?assertEqual(error, maps:find(<<"media_url">>, Out)),
+    ?assertEqual(<<"https://ok.example/t.png">>, maps:get(<<"thumbnail">>, Out)).

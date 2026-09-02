@@ -732,37 +732,50 @@ normalise_item(Item) ->
     Value = first_defined(Props, [<<"resume">>, <<"value">>,
                                   <<"description">>],              <<>>),
     Ips   = first_defined(Props, [<<"ips">>],                      null),
-    Base0 = #{<<"label">> => Label, <<"value">> => Value,
+    Base0 = #{<<"label">> => html_escape(cap(Label, 256)),
+              <<"value">> => html_escape(cap(Value, 2048)),
               <<"score">> => Score, <<"type">>  => Type},
     Base1 = add_media(Base0, Props),
     Base  = case maps:get(<<"doc_type">>, Props, undefined) of
                 D when is_binary(D), byte_size(D) > 0 -> Base1#{<<"doc_type">> => D};
                 _ -> Base1
             end,
-    case {Url, Ips} of
+    case {safe_url(Url), Ips} of
         {null, [_|_]} -> Base#{<<"ips">>  => Ips};
         {null, _}     -> Base;
-        _             -> Base#{<<"url">>  => Url}
+        {SafeUrl, _}  -> Base#{<<"url">>  => SafeUrl}
     end.
 
 %% @private Copy media fields into the item when the embryo declares a media_type.
-%% Non-media embryos are returned unchanged.
+%% Non-media embryos are returned unchanged. URL-shaped fields are scheme-
+%% filtered (http/https only); text fields are HTML-escaped and length-capped.
 add_media(Base, Props) ->
     case first_defined(Props, [<<"media_type">>], null) of
         null -> Base;
         MType ->
-            Keys = [<<"thumbnail">>, <<"media_url">>, <<"duration">>,
-                    <<"license">>,   <<"author">>,    <<"source">>],
+            UrlKeys  = [<<"thumbnail">>, <<"media_url">>, <<"source">>],
+            TextKeys = [<<"duration">>, <<"license">>, <<"author">>],
+            Acc0 = Base#{<<"media_type">> => MType},
+            Acc1 = lists:foldl(
+              fun(K, Acc) ->
+                  case maps:get(K, Props, undefined) of
+                      U when is_binary(U) ->
+                          case safe_url(U) of
+                              null -> Acc;
+                              S    -> Acc#{K => S}
+                          end;
+                      _ -> Acc
+                  end
+              end, Acc0, UrlKeys),
             lists:foldl(
               fun(K, Acc) ->
                   case maps:get(K, Props, undefined) of
                       undefined -> Acc;
                       null      -> Acc;
+                      V when is_binary(V) -> Acc#{K => html_escape(cap(V, 256))};
                       V         -> Acc#{K => V}
                   end
-              end,
-              Base#{<<"media_type">> => MType},
-              Keys)
+              end, Acc1, TextKeys)
     end.
 
 first_defined(_Props, [], Default) -> Default;
@@ -772,6 +785,32 @@ first_defined(Props, [Key | Rest], Default) ->
         null      -> first_defined(Props, Rest, Default);
         V         -> V
     end.
+
+%% @private HTML-escape a binary so peer text cannot inject markup when rendered.
+html_escape(B) when is_binary(B) ->
+    << (esc_char(C)) || <<C>> <= B >>;
+html_escape(X) -> X.
+
+esc_char($&) -> <<"&amp;">>;
+esc_char($<) -> <<"&lt;">>;
+esc_char($>) -> <<"&gt;">>;
+esc_char($") -> <<"&quot;">>;
+esc_char($') -> <<"&#39;">>;
+esc_char(C)  -> <<C>>.
+
+%% @private Return the URL only if scheme is http/https, else null.
+safe_url(null) -> null;
+safe_url(U) when is_binary(U) ->
+    case emquest_safeurl:check_scheme(U) of
+        ok -> U;
+        _  -> null
+    end;
+safe_url(_) -> null.
+
+%% @private Truncate an over-long binary field.
+cap(B, Max) when is_binary(B), byte_size(B) > Max ->
+    binary:part(B, 0, Max);
+cap(B, _) -> B.
 
 %%====================================================================
 %% Disco HTTP
