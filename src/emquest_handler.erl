@@ -48,7 +48,7 @@
 -behaviour(cowboy_handler).
 
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
-         security_headers/1, security_headers/2, app_script_extra/0]).
+         security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -91,31 +91,39 @@ init(Req0, preview) ->
     }, Body, Req0), preview};
 
 init(Req0, network) ->
-    Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
-    {Code, Body, CT} = case file:read_file(Path) of
-        {ok, Bin} -> {200, Bin, <<"text/html">>};
-        {error, R} ->
-            logger:error("[emquest] network.html read failed: ~p", [R]),
-            {500, <<"Internal Server Error">>, <<"text/plain">>}
-    end,
-    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network};
+    case internal_exposed() of
+        false -> {ok, forbidden(Req0), network};
+        true ->
+            Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
+            {Code, Body, CT} = case file:read_file(Path) of
+                {ok, Bin} -> {200, Bin, <<"text/html">>};
+                {error, R} ->
+                    logger:error("[emquest] network.html read failed: ~p", [R]),
+                    {500, <<"Internal Server Error">>, <<"text/plain">>}
+            end,
+            {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network}
+    end;
 
 init(Req0, network_peers) ->
-    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
-    PeerList = [begin
-        H    = maps:get(host,       P, <<"unknown">>),
-        QP   = maps:get(query_port, P, undefined),
-        Name = maps:get(name,       P, <<>>),
-        #{<<"host">>       => H,
-          <<"name">>       => Name,
-          <<"query_port">> => case QP of undefined -> null; _ -> QP end,
-          <<"routable">>   => QP =/= undefined}
-    end || P <- Peers],
-    Body = iolist_to_binary(json:encode(PeerList)),
-    {ok, cowboy_req:reply(200, #{
-        <<"content-type">>  => <<"application/json">>,
-        <<"cache-control">> => <<"no-cache">>
-    }, Body, Req0), network_peers};
+    case internal_exposed() of
+        false -> {ok, forbidden(Req0), network_peers};
+        true ->
+            Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+            PeerList = [begin
+                H    = maps:get(host,       P, <<"unknown">>),
+                QP   = maps:get(query_port, P, undefined),
+                Name = maps:get(name,       P, <<>>),
+                #{<<"host">>       => H,
+                  <<"name">>       => Name,
+                  <<"query_port">> => case QP of undefined -> null; _ -> QP end,
+                  <<"routable">>   => QP =/= undefined}
+            end || P <- Peers],
+            Body = iolist_to_binary(json:encode(PeerList)),
+            {ok, cowboy_req:reply(200, #{
+                <<"content-type">>  => <<"application/json">>,
+                <<"cache-control">> => <<"no-cache">>
+            }, Body, Req0), network_peers}
+    end;
 
 init(Req0, health) ->
     Peers = emquest_health:status(),
@@ -139,8 +147,12 @@ init(Req0, health) ->
     }, Body, Req0), health};
 
 init(Req0, status) ->
-    {ok, cowboy_req:reply(200, security_headers(<<"text/html; charset=utf-8">>),
-        status_page(), Req0), status};
+    case internal_exposed() of
+        false -> {ok, forbidden(Req0), status};
+        true ->
+            {ok, cowboy_req:reply(200, security_headers(<<"text/html; charset=utf-8">>),
+                status_page(), Req0), status}
+    end;
 
 init(Req0, query) ->
     case cowboy_req:method(Req0) of
@@ -1107,6 +1119,19 @@ truncate(B, Max) ->
 %% @private
 nn(undefined) -> null;
 nn(V)         -> V.
+
+%% @doc Whether internal topology routes (/network, /network/peers, /status)
+%% are served. Off by default — they leak mesh topology. Enable for internal
+%% access only (tailscale / admin), never on the public tunnel.
+-spec internal_exposed() -> boolean().
+internal_exposed() ->
+    application:get_env(emquest, expose_internal, false) =:= true.
+
+%% @private 403 JSON reply for gated routes.
+forbidden(Req) ->
+    cowboy_req:reply(403,
+        #{<<"content-type">> => <<"application/json">>},
+        <<"{\"error\":\"not found\"}">>, Req).
 
 %% @doc Response headers for HTML pages: strict CSP + hardening.
 %% `img-src` allows self + https (peer thumbnails are proxied/https only);
