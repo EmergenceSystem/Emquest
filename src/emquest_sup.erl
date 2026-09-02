@@ -16,6 +16,7 @@
 %%% GET  /network         → emquest_handler (serves network.html)
 %%% GET  /network/peers   → emquest_handler (JSON peer list)
 %%% GET  /admin            → emquest_handler (admin shell page)
+%%% GET  /admin/me          → emquest_handler (gated: authenticated admin's name)
 %%% GET  /admin/peers      → emquest_handler (gated JSON peer list)
 %%% POST /admin/ban        → emquest_handler (gated: ban a peer)
 %%% POST /admin/unban      → emquest_handler (gated: unban a peer)
@@ -76,6 +77,7 @@ init([]) ->
                     {"/status",         emquest_handler, status},
                     {"/stt",            emquest_handler, stt},
                     {"/admin",          emquest_handler, admin_index},
+                    {"/admin/me",       emquest_handler, admin_me},
                     {"/admin/peers",    emquest_handler, admin_peers},
                     {"/admin/ban",      emquest_handler, admin_ban},
                     {"/admin/unban",    emquest_handler, admin_unban},

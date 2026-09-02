@@ -1,16 +1,84 @@
 /* Emquest admin console — talks to the gated /admin/* JSON routes. */
 
-const TOKEN_KEY = 'emquest_admin_token';
+/* Token is persisted in IndexedDB (origin-scoped, survives across sessions)
+ * instead of sessionStorage, so a returning admin is auto-recognized on
+ * page load via GET /admin/me. All IndexedDB access is wrapped so a
+ * failure (unsupported, private mode, blocked) degrades to "no stored
+ * token" rather than throwing. */
+const DB_NAME  = 'emquest_admin';
+const DB_STORE = 'kv';
+const DB_KEY   = 'token';
+
+let currentToken = null;
+
+function openDb() {
+    return new Promise((resolve, reject) => {
+        if (!('indexedDB' in window)) { reject(new Error('no indexedDB')); return; }
+        let req;
+        try {
+            req = indexedDB.open(DB_NAME, 1);
+        } catch (e) { reject(e); return; }
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('indexedDB open failed'));
+    });
+}
+
+async function idbGet() {
+    try {
+        const db = await openDb();
+        return await new Promise((resolve) => {
+            try {
+                const tx = db.transaction(DB_STORE, 'readonly');
+                const rq = tx.objectStore(DB_STORE).get(DB_KEY);
+                rq.onsuccess = () => resolve(rq.result == null ? null : rq.result);
+                rq.onerror = () => resolve(null);
+            } catch (_e) { resolve(null); }
+        });
+    } catch (_e) {
+        return null;
+    }
+}
+
+async function idbSet(value) {
+    try {
+        const db = await openDb();
+        return await new Promise((resolve) => {
+            try {
+                const tx = db.transaction(DB_STORE, 'readwrite');
+                tx.objectStore(DB_STORE).put(value, DB_KEY);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+            } catch (_e) { resolve(); }
+        });
+    } catch (_e) {
+        /* no-op */
+    }
+}
+
+async function idbDel() {
+    try {
+        const db = await openDb();
+        return await new Promise((resolve) => {
+            try {
+                const tx = db.transaction(DB_STORE, 'readwrite');
+                tx.objectStore(DB_STORE).delete(DB_KEY);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+            } catch (_e) { resolve(); }
+        });
+    } catch (_e) {
+        /* no-op */
+    }
+}
 
 function escHtml(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;')
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function getToken() {
-    const el = document.getElementById('token');
-    return el ? el.value.trim() : '';
 }
 
 function setStatus(msg, kind) {
@@ -37,6 +105,37 @@ async function apiPost(path, token, body) {
         throw new Error(msg);
     }
     return payload;
+}
+
+/* Validate a token against /admin/me. Returns the admin name on success,
+ * null on 401/other failure. */
+async function fetchMe(token) {
+    try {
+        const r = await fetch('/admin/me', { headers: { 'Authorization': 'Bearer ' + token } });
+        if (!r.ok) return null;
+        const payload = await r.json();
+        return (payload && typeof payload.name === 'string') ? payload.name : null;
+    } catch (_e) {
+        return null;
+    }
+}
+
+function showLoginRow() {
+    const loginRow = document.getElementById('login-row');
+    const greeting = document.getElementById('greeting');
+    const logout   = document.getElementById('logout');
+    if (loginRow) loginRow.hidden = false;
+    if (greeting) { greeting.hidden = true; greeting.textContent = ''; }
+    if (logout) logout.hidden = true;
+}
+
+function showGreeting(name) {
+    const loginRow = document.getElementById('login-row');
+    const greeting = document.getElementById('greeting');
+    const logout   = document.getElementById('logout');
+    if (loginRow) loginRow.hidden = true;
+    if (greeting) { greeting.hidden = false; greeting.textContent = 'Connecté : ' + name; }
+    if (logout) logout.hidden = false;
 }
 
 function tierClass(tier) {
@@ -98,10 +197,9 @@ function renderPeers(peers) {
 }
 
 async function doAction(path, body) {
-    const token = getToken();
-    if (!token) { setStatus('enter a token first', 'err'); return; }
+    if (!currentToken) { setStatus('enter a token first', 'err'); return; }
     try {
-        await apiPost(path, token, body);
+        await apiPost(path, currentToken, body);
         setStatus('ok', 'ok');
         await loadPeers();
     } catch (err) {
@@ -110,12 +208,10 @@ async function doAction(path, body) {
 }
 
 async function loadPeers() {
-    const token = getToken();
-    if (!token) { setStatus('enter a token first', 'err'); return; }
-    sessionStorage.setItem(TOKEN_KEY, token);
+    if (!currentToken) { setStatus('enter a token first', 'err'); return; }
     setStatus('loading…');
     try {
-        const r = await fetch('/admin/peers', { headers: { 'Authorization': 'Bearer ' + token } });
+        const r = await fetch('/admin/peers', { headers: { 'Authorization': 'Bearer ' + currentToken } });
         if (r.status === 401) { setStatus('unauthorized', 'err'); renderPeers([]); return; }
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const peers = await r.json();
@@ -126,18 +222,57 @@ async function loadPeers() {
     }
 }
 
-function init() {
+/* Submit-token flow: validate against /admin/me, persist on success. */
+async function submitToken() {
     const tokenInput = document.getElementById('token');
-    const loadBtn    = document.getElementById('load-btn');
-    try {
-        const saved = sessionStorage.getItem(TOKEN_KEY);
-        if (saved && tokenInput) tokenInput.value = saved;
-    } catch (_e) { /* sessionStorage unavailable — ignore */ }
-
-    if (loadBtn) loadBtn.addEventListener('click', loadPeers);
-    if (tokenInput) tokenInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') loadPeers();
-    });
+    const token = tokenInput ? tokenInput.value.trim() : '';
+    if (!token) { setStatus('enter a token first', 'err'); return; }
+    setStatus('checking…');
+    const name = await fetchMe(token);
+    if (!name) {
+        setStatus('token invalide', 'err');
+        return;
+    }
+    currentToken = token;
+    await idbSet(token);
+    showGreeting(name);
+    await loadPeers();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+async function doLogout() {
+    await idbDel();
+    currentToken = null;
+    const tokenInput = document.getElementById('token');
+    if (tokenInput) tokenInput.value = '';
+    showLoginRow();
+    renderPeers([]);
+    setStatus('');
+}
+
+async function init() {
+    const tokenInput = document.getElementById('token');
+    const loadBtn    = document.getElementById('load-btn');
+    const logoutBtn  = document.getElementById('logout');
+
+    if (loadBtn) loadBtn.addEventListener('click', submitToken);
+    if (tokenInput) tokenInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitToken();
+    });
+    if (logoutBtn) logoutBtn.addEventListener('click', doLogout);
+
+    const saved = await idbGet();
+    if (saved) {
+        const name = await fetchMe(saved);
+        if (name) {
+            currentToken = saved;
+            showGreeting(name);
+            await loadPeers();
+            return;
+        }
+        /* stale token */
+        await idbDel();
+    }
+    showLoginRow();
+}
+
+document.addEventListener('DOMContentLoaded', () => { init(); });

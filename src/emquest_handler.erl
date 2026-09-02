@@ -217,6 +217,17 @@ init(Req0, admin_index) ->
     end,
     {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), admin_index};
 
+%% /admin/me — returns the authenticated admin's name (for the UI to greet
+%% + auto-recognize a returning admin whose token is already in IndexedDB).
+init(Req0, admin_me) ->
+    case admin_auth(Req0) of
+        {ok, Name} ->
+            {ok, cowboy_req:reply(200,
+                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
+                iolist_to_binary(json:encode(#{<<"name">> => Name})), Req0), admin_me};
+        _ -> {ok, unauthorized(Req0), admin_me}
+    end;
+
 %% /admin/peers — gated JSON peer list with trust tier + banned flag.
 init(Req0, admin_peers) ->
     case admin_auth(Req0) of
