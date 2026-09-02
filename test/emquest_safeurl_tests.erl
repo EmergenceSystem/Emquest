@@ -32,3 +32,21 @@ guard_rejects_metadata_url_test() ->
 guard_rejects_localhost_test() ->
     ?assertMatch({error, blocked_ip},
                  emquest_safeurl:safe_get(<<"http://127.0.0.1:8300/health">>, [], [{timeout, 2000}])).
+
+mapped_ipv6_blocked_test() ->
+    %% ::ffff:127.0.0.1 and ::ffff:169.254.169.254
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({0,0,0,0,0,16#ffff,16#7f00,16#0001})),
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({0,0,0,0,0,16#ffff,16#a9fe,16#a9fe})),
+    %% ::ffff:8.8.8.8 stays allowed
+    ?assertEqual(false, emquest_safeurl:is_blocked_ip({0,0,0,0,0,16#ffff,16#0808,16#0808})).
+
+nat64_and_compat_blocked_test() ->
+    %% 64:ff9b::127.0.0.1
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({16#64,16#ff9b,0,0,0,0,16#7f00,16#0001})),
+    %% ::127.0.0.1 (ipv4-compatible)
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({0,0,0,0,0,0,16#7f00,16#0001})).
+
+extra_ipv4_ranges_blocked_test() ->
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({0,1,2,3})),      %% 0.0.0.0/8
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({100,64,0,1})),   %% CGNAT 100.64/10
+    ?assertEqual(true, emquest_safeurl:is_blocked_ip({100,127,255,1})).
