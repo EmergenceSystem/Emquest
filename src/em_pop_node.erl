@@ -827,8 +827,15 @@ merge_peers([P | Rest],
                 false -> merge_peers(Rest, State);
                 true ->
                     kvex:add(Ix, P#peer.id, P#peer.vector),
+                    %% Restore persisted trust (a peer learned transitively via
+                    %% gossip is never contacted directly, so without this its
+                    %% earned trust would reset to 0 on every restart).
+                    Seed = case catch em_pop_store:get_trust(P#peer.id) of
+                               {T0, _} when is_float(T0) -> T0;
+                               _ -> ?TRUST_MIN
+                           end,
                     NewPeer = P#peer{
-                        trust     = ?TRUST_MIN,
+                        trust     = Seed,
                         last_seen = erlang:monotonic_time(millisecond)
                     },
                     State1 = State#state{peers = Peers#{P#peer.id => NewPeer}},
