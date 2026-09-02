@@ -99,6 +99,9 @@
         .tier-excluded   { color: var(--red);   background: rgba(229,72,77,0.1); }
 
         .badge-banned { color: var(--red); font-size: 0.7rem; }
+        .badge-verified { color: var(--green); font-size: 0.75rem; margin-left: 0.2rem; }
+        .badge-root { color: var(--amber); font-size: 0.65rem; letter-spacing: 0.04em; margin-left: 0.3rem; }
+        .muted { color: var(--muted); }
 
         .row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
         .row-actions input[type="text"] { min-width: 70px; flex: 0 0 70px; padding: 0.3rem 0.4rem; }
@@ -134,11 +137,14 @@
                 <th>Tier</th>
                 <th>Port</th>
                 <th>Status</th>
+                <th>Role</th>
+                <th>Pubkey FP</th>
+                <th>Last seen</th>
                 <th>Actions</th>
             </tr>
         </thead>
         <tbody id="peer-rows">
-            <tr><td colspan="7" class="empty">Enter a token and click Load.</td></tr>
+            <tr><td colspan="10" class="empty">Enter a token and click Load.</td></tr>
         </tbody>
     </table>
 </div>

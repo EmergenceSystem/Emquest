@@ -50,7 +50,7 @@
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0,
          client_ip/1, response_ok/2]).
--export([trust_tier/1, peer_admin_json/1]).
+-export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -1266,18 +1266,32 @@ peer_admin_json(P) ->
     Name  = maps:get(name, P, maps:get(<<"name">>, P, <<>>)),
     Trust = maps:get(trust, P, maps:get(<<"trust">>, P, 0.0)),
     QP    = maps:get(query_port, P, maps:get(<<"query_port">>, P, undefined)),
+    PK    = maps:get(pubkey, P, undefined),
+    LS    = maps:get(last_seen, P, null),
+    Role  = maps:get(role, P, undefined),
+    PkB64 = case PK of B when is_binary(B) -> base64:encode(B); _ -> undefined end,
     IdB64 = case Id of undefined -> null; _ when is_binary(Id) -> base64:encode(Id); _ -> null end,
     #{<<"id">>    => IdB64,
       <<"name">>  => Name,
       <<"trust">> => Trust,
       <<"tier">>  => trust_tier(Trust),
       <<"query_port">> => case QP of undefined -> null; _ -> QP end,
-      <<"banned">> => case IdB64 of null -> false; _ -> (catch em_pop_store:is_banned(Id)) =:= true end}.
+      <<"banned">> => case IdB64 of null -> false; _ -> (catch em_pop_store:is_banned(Id)) =:= true end,
+      <<"verified">>  => is_binary(PK),
+      <<"pubkey_fp">> => case PkB64 of undefined -> null; _ -> binary:part(PkB64, 0, min(12, byte_size(PkB64))) end,
+      <<"root">>      => is_root_pubkey(PkB64),
+      <<"role">>      => case Role of undefined -> null; _ -> atom_to_binary(Role, utf8) end,
+      <<"last_seen">> => case LS of I when is_integer(I) -> I; _ -> null end}.
 
 %% @private Coarse trust bucket used to colour the admin peer table.
 trust_tier(T) when is_number(T), T < 0.10 -> <<"excluded">>;
 trust_tier(T) when is_number(T), T < 0.40 -> <<"quarantine">>;
 trust_tier(_) -> <<"normal">>.
+
+%% @private Whether a base64 pubkey is one of the configured authoritative roots.
+is_root_pubkey(undefined) -> false;
+is_root_pubkey(PkB64) ->
+    lists:member(PkB64, application:get_env(emquest, root_pubkeys, [])).
 
 %% @private Gated POST action (ban/unban/trust). Body: {"id":"<base64 id>", ...}.
 %% For `trust' also `"trust":Float'.

@@ -1055,7 +1055,7 @@ payload_to_peers(_) ->
 peer_to_map(#peer{id = Id, host = H, port = P,
                   query_port = QP, name = Name,
                   vector = V, trust = T, last_seen = LS,
-                  base_path = BP, role = Role}) ->
+                  base_path = BP, role = Role, pubkey = PK}) ->
     #{id         => Id,
       host       => H,
       port       => P,
@@ -1065,7 +1065,8 @@ peer_to_map(#peer{id = Id, host = H, port = P,
       trust      => T,
       last_seen  => LS,
       base_path  => BP,
-      role       => Role}.
+      role       => Role,
+      pubkey     => PK}.
 
 %% Convert a list of #peer{} records to plain maps.
 -spec peers_to_maps([#peer{}]) -> [map()].

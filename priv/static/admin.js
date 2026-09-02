@@ -144,16 +144,29 @@ function tierClass(tier) {
     return 'tier tier-normal';
 }
 
+function verifiedBadge(peer) {
+    if (!peer.verified) return '';
+    return '<span class="badge-verified" title="pubkey bound">&#10003;</span>';
+}
+
+function rootBadge(peer) {
+    if (!peer.root) return '';
+    return '<span class="badge-root" title="configured root pubkey">&#9733; ROOT</span>';
+}
+
 function rowMarkup(peer) {
     const id    = peer.id;
     const trust = (typeof peer.trust === 'number') ? peer.trust.toFixed(2) : peer.trust;
     return `
-        <td>${escHtml(peer.name || '(unnamed)')}</td>
+        <td>${escHtml(peer.name || '(unnamed)')} ${verifiedBadge(peer)} ${rootBadge(peer)}</td>
         <td class="mono">${escHtml(id || '&mdash;')}</td>
         <td>${escHtml(trust)}</td>
         <td><span class="${tierClass(peer.tier)}">${escHtml(peer.tier)}</span></td>
         <td>${peer.query_port != null ? escHtml(peer.query_port) : '&mdash;'}</td>
         <td>${peer.banned ? '<span class="badge-banned">banned</span>' : ''}</td>
+        <td>${escHtml(peer.role || '&mdash;')}</td>
+        <td class="mono muted">${escHtml(peer.pubkey_fp || '&mdash;')}</td>
+        <td>${peer.last_seen != null ? escHtml(peer.last_seen) : '&mdash;'}</td>
         <td class="row-actions">
             <button type="button" class="ban-btn" ${peer.banned || !id ? 'disabled' : ''}>Ban</button>
             <button type="button" class="unban-btn" ${!peer.banned || !id ? 'disabled' : ''}>Unban</button>
@@ -168,7 +181,7 @@ function renderPeers(peers) {
     tbody.innerHTML = '';
 
     if (!Array.isArray(peers) || peers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">No peers.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No peers.</td></tr>';
         return;
     }
 
