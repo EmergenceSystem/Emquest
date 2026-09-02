@@ -18,43 +18,23 @@
 /* ================================================================== */
 /* Ambient canvas                                                     */
 /* ================================================================== */
-(function initCanvas() {
-    const canvas = document.getElementById('bg-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    let dots = [];
-
-    function resize() {
-        canvas.width  = window.innerWidth;
-        canvas.height = window.innerHeight;
-        const spacing = canvas.width / 40;
-        const rows    = Math.ceil(canvas.height / spacing) + 1;
-        dots = [];
-        for (let r = 0; r <= rows; r++)
-            for (let c = 0; c <= 40; c++)
-                dots.push({
-                    x: c * spacing, y: r * spacing,
-                    phase: Math.random() * Math.PI * 2,
-                    speed: 0.4 + Math.random() * 0.6
-                });
-    }
-
-    function draw(ts) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const t = ts * 0.001;
-        dots.forEach(d => {
-            const a = 0.05 + 0.05 * Math.sin(t * d.speed + d.phase);
-            ctx.beginPath();
-            ctx.arc(d.x, d.y, 1.5, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(0,220,100,${a})`;
-            ctx.fill();
-        });
-        requestAnimationFrame(draw);
-    }
-
-    window.addEventListener('resize', resize);
-    resize();
-    requestAnimationFrame(draw);
+(function(){
+  const canvas=document.getElementById('bg-canvas'); if(!canvas) return;
+  const x=canvas.getContext('2d'); let w,h,t=0;
+  function rs(){w=canvas.width=canvas.offsetWidth;h=canvas.height=canvas.offsetHeight}
+  rs(); addEventListener('resize',rs);
+  const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const N=[]; for(let i=0;i<90;i++){const ph=Math.acos(2*Math.random()-1),th=Math.random()*7;N.push([Math.sin(ph)*Math.cos(th),Math.sin(ph)*Math.sin(th),Math.cos(ph)])}
+  function frame(){
+    x.clearRect(0,0,w,h); if(!reduce) t+=.003;
+    const cx=w*.8,cy=h*.34,R=Math.min(w,h)*.34;
+    const pr=N.map(([a,b,cc])=>{const X=a*Math.cos(t)-cc*Math.sin(t),Z=a*Math.sin(t)+cc*Math.cos(t);return[cx+X*R,cy+b*R,(Z+1)/2]});
+    x.lineWidth=1.1;
+    for(let i=0;i<pr.length;i++)for(let j=i+1;j<pr.length;j++){const d=Math.hypot(pr[i][0]-pr[j][0],pr[i][1]-pr[j][1]);if(d<82){x.strokeStyle='rgba(0,255,160,'+(1-d/82)*.42*((pr[i][2]+pr[j][2])/2)+')';x.beginPath();x.moveTo(pr[i][0],pr[i][1]);x.lineTo(pr[j][0],pr[j][1]);x.stroke()}}
+    for(const p of pr){x.fillStyle='rgba(0,255,170,'+(.25+p[2]*.75)+')';x.beginPath();x.arc(p[0],p[1],1+p[2]*1.8,0,7);x.fill()}
+    if(!reduce) requestAnimationFrame(frame);
+  }
+  frame();
 })();
 
 /* ================================================================== */
@@ -348,6 +328,18 @@ function buildCard(item, sid, pos) {
 
     li.innerHTML = buildCardBody(item, pos);
 
+    /* Media thumbnails: attach load/error handlers programmatically (no
+       inline on*= attributes, for CSP). The audio thumb just hides itself
+       on error; the image/video thumb reuses mediaImgLoad/mediaImgError. */
+    li.querySelectorAll('img.media-thumb').forEach(img => {
+        if (img.classList.contains('media-thumb--audio')) {
+            img.addEventListener('error', () => img.remove());
+        } else {
+            img.addEventListener('load', () => mediaImgLoad(img));
+            img.addEventListener('error', () => mediaImgError(img));
+        }
+    });
+
     /* Media cards: image → lightbox, video → source, audio → no navigation */
     if (item.media_type === 'image') {
         const full = safeUrl(item.media_url) || safeUrl(item.thumbnail);
@@ -465,8 +457,7 @@ function buildMediaBody(item) {
             <div class="media-card media-audio">
                 <div class="media-audio-head">
                     ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
-                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
-                         onerror="this.remove()">` : ''}
+                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt="">` : ''}
                     <div class="media-meta">
                         ${title ? `<span class="item-title">${title}</span>` : ''}
                         ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
@@ -499,8 +490,7 @@ function buildMediaBody(item) {
     const play     = (t === 'video') ? `<span class="media-play">▶</span>` : '';
     const thumbHtml = thumb
         ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
-             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
-             onload="mediaImgLoad(this)" onerror="mediaImgError(this)">`
+             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}">`
         : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
     return `
         <div class="media-card media-${escAttr(t)}">
@@ -681,6 +671,25 @@ function applyTypeFilter() {
   const c = document.getElementById('tf-count');
   if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
+
+// media-type drawer open/close
+(function(){
+  const pill=document.getElementById('type-pill'),dr=document.getElementById('type-drawer'),sc=document.getElementById('drawer-scrim');
+  if(!pill||!dr||!sc) return;
+  const open=()=>{dr.classList.add('open');sc.classList.add('open')};
+  const close=()=>{dr.classList.remove('open');sc.classList.remove('open')};
+  pill.addEventListener('click',open); sc.addEventListener('click',close);
+  addEventListener('keydown',e=>{if(e.key==='Escape')close()});
+})();
+// result-card 3D tilt (delegated; skip touch/reduced-motion)
+(function(){
+  if(matchMedia('(prefers-reduced-motion:reduce)').matches||matchMedia('(pointer:coarse)').matches) return;
+  const list=document.getElementById('results'); if(!list) return;
+  list.addEventListener('mousemove',e=>{const c=e.target.closest('.item-card'); if(!c)return;
+    const r=c.getBoundingClientRect(),px=(e.clientX-r.left)/r.width-.5,py=(e.clientY-r.top)/r.height-.5;
+    c.style.transform=`rotateY(${px*8}deg) rotateX(${-py*8}deg) translateZ(12px)`});
+  list.addEventListener('mouseout',e=>{const c=e.target.closest('.item-card'); if(c)c.style.transform=''});
+})();
 
 function ensureLightbox() {
     if (!_lightbox) {
