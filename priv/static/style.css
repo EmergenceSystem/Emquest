@@ -99,8 +99,8 @@ body::after {
     background: var(--glass);
     border-bottom: 1px solid var(--glass-brd);
     backdrop-filter: blur(18px) saturate(1.3);
-    padding: 0 2rem;
-    height: var(--header-h);
+    padding: 0.55rem 2rem;
+    min-height: var(--header-h);
     transition: box-shadow 0.3s var(--ease), background 0.3s var(--ease);
 }
 .app-header.scrolled {
@@ -354,7 +354,8 @@ body::after {
     backdrop-filter: blur(14px) saturate(1.2);
     transform-style: preserve-3d;
 
-    opacity: 0;
+    /* cards are visible by default; cardIn only slides them in (no opacity gate,
+       so a delayed/interrupted entrance animation can never leave them invisible). */
     transform: translateY(8px);
     animation: cardIn 0.28s var(--ease) forwards;
 
@@ -576,6 +577,7 @@ a.item-title:hover,
 /* Footer                                                             */
 /* ================================================================== */
 .app-footer {
+    display: none; /* removed per design — keep the element for JS refs */
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
     background: rgba(0, 14, 10, 0.72); border-top: 1px solid var(--glass-brd);
     padding: 0 2rem; height: 36px;
@@ -596,8 +598,8 @@ a.item-title:hover,
 /* Animations                                                         */
 /* ================================================================== */
 @keyframes cardIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { transform: translateY(8px); }
+    to   { transform: translateY(0); }
 }
 @keyframes fadeSlideIn {
     from { opacity: 0; transform: translateX(-4px); }

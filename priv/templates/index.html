@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=29">
+    <link rel="stylesheet" href="/static/style.css?v=30">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -62,7 +62,7 @@
                         </svg>
                     </button>
                 </div>
-                <button class="type-pill" id="type-pill" type="button">▚ Type de média</button>
+                <button class="type-pill" id="type-pill" type="button">▚ Media type</button>
                 <!-- Status line below search box -->
                 <div class="search-meta" id="search-meta">
                     <span class="meta-hint">↵ send &nbsp;·&nbsp; shift+↵ newline</span>
@@ -113,9 +113,9 @@
 
     <!-- Media-type filter drawer -->
     <div class="drawer-scrim" id="drawer-scrim"></div>
-    <aside class="type-drawer" id="type-drawer" aria-label="Type de média">
-        <h2>// TYPE DE MÉDIA</h2>
-        <div class="type-drawer-sub">Affiche uniquement les types choisis.</div>
+    <aside class="type-drawer" id="type-drawer" aria-label="Media type">
+        <h2>// MEDIA TYPE</h2>
+        <div class="type-drawer-sub">Show only the selected types.</div>
         <div class="type-filters" id="type-filters">
             <label><input type="checkbox" value="text" checked> text</label>
             <label><input type="checkbox" value="image" checked> image</label>
