@@ -18,3 +18,13 @@ separate_keys_independent_test_() ->
         ?_assert(emquest_ratelimit:allow(<<"a">>, 1, 60)
                  andalso emquest_ratelimit:allow(<<"b">>, 1, 60))
     end}.
+
+sweep_removes_stale_test_() ->
+    {setup, fun setup/0, fun cleanup/1, fun(_) ->
+        true = emquest_ratelimit:allow(<<"stale">>, 5, 60),
+        %% force the entry's last-touch far into the past
+        [{_, Tok, _}] = ets:lookup(emquest_ratelimit, <<"stale">>),
+        ets:insert(emquest_ratelimit, {<<"stale">>, Tok, erlang:monotonic_time(second) - 10000}),
+        emquest_ratelimit:sweep(3600),
+        ?_assertEqual([], ets:lookup(emquest_ratelimit, <<"stale">>))
+    end}.

@@ -78,3 +78,12 @@ internal_gate_on_test() ->
     application:set_env(emquest, expose_internal, true),
     ?assertEqual(true, emquest_handler:internal_exposed()),
     application:unset_env(emquest, expose_internal).
+
+client_ip_prefers_cf_header_test() ->
+    Req = #{headers => #{<<"cf-connecting-ip">> => <<"9.9.9.9">>},
+            peer => {{1,2,3,4}, 5555}},
+    ?assertEqual(<<"9.9.9.9">>, emquest_handler:client_ip(Req)).
+
+client_ip_falls_back_to_peer_test() ->
+    Req = #{headers => #{}, peer => {{1,2,3,4}, 5555}},
+    ?assertEqual(<<"1.2.3.4">>, emquest_handler:client_ip(Req)).

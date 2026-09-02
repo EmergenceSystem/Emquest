@@ -52,6 +52,8 @@ start_link() ->
 %% @end
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
+    emquest_ratelimit:init(),
+    _ = timer:apply_interval(3600000, emquest_ratelimit, sweep, [3600]),
     case http_enabled() of
         true ->
             Port     = get_port(),

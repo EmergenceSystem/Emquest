@@ -7,7 +7,7 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_ratelimit).
--export([init/0, allow/3]).
+-export([init/0, allow/3, sweep/1]).
 
 -define(TAB, ?MODULE).
 
@@ -38,3 +38,10 @@ allow(Key, Capacity, RefillSeconds) ->
                 false -> ets:insert(?TAB, {Key, Avail, NewLast}), false
             end
     end.
+
+%% @doc Delete buckets untouched for more than MaxAgeSeconds. Keeps the table
+%% bounded under public traffic (a forgotten key is recreated fresh on next hit).
+-spec sweep(pos_integer()) -> non_neg_integer().
+sweep(MaxAgeSeconds) ->
+    Cutoff = erlang:monotonic_time(second) - MaxAgeSeconds,
+    ets:select_delete(?TAB, [{{'_', '_', '$1'}, [{'<', '$1', Cutoff}], [true]}]).

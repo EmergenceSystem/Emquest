@@ -48,7 +48,8 @@
 -behaviour(cowboy_handler).
 
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
-         security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0]).
+         security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0,
+         client_ip/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -157,9 +158,13 @@ init(Req0, status) ->
 init(Req0, query) ->
     case cowboy_req:method(Req0) of
         <<"POST">> ->
-            {ok, RawBody, Req1} = cowboy_req:read_body(Req0),
-            handle_query(RawBody, Req1),
-            {ok, Req1, query};
+            case emquest_ratelimit:allow(client_ip(Req0), 10, 60) of
+                false -> too_many(Req0, query);
+                true ->
+                    {ok, RawBody, Req1} = cowboy_req:read_body(Req0),
+                    handle_query(RawBody, Req1),
+                    {ok, Req1, query}
+            end;
         _ ->
             {ok, cowboy_req:reply(405,
                 #{<<"content-type">> => <<"application/json">>},
@@ -193,23 +198,29 @@ init(Req0, media_prepare) ->
 init(Req0, stt) ->
     case cowboy_req:method(Req0) of
         <<"POST">> ->
-            case read_upload(Req0) of
-                {ok, _Filename, Bytes, Req1} ->
-                    case stt_forward(<<"audio.wav">>, Bytes) of
-                        {ok, Text} ->
-                            {ok, cowboy_req:reply(200, media_ct(),
-                                json:encode(#{<<"text">> => Text}), Req1), stt};
-                        {error, Reason} ->
-                            {ok, cowboy_req:reply(502, media_ct(),
-                                json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
-                    end;
-                {error, Reason, Req1} ->
-                    {ok, cowboy_req:reply(400, media_ct(),
-                        json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
+            case emquest_ratelimit:allow(client_ip(Req0), 5, 60) of
+                false -> too_many(Req0, stt);
+                true  -> stt_do(Req0)
             end;
         _ ->
             {ok, cowboy_req:reply(405, media_ct(),
                 <<"{\"error\":\"Use POST\"}">>, Req0), stt}
+    end.
+
+stt_do(Req0) ->
+    case read_upload(Req0) of
+        {ok, _Filename, Bytes, Req1} ->
+            case stt_forward(<<"audio.wav">>, Bytes) of
+                {ok, Text} ->
+                    {ok, cowboy_req:reply(200, media_ct(),
+                        json:encode(#{<<"text">> => Text}), Req1), stt};
+                {error, Reason} ->
+                    {ok, cowboy_req:reply(502, media_ct(),
+                        json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
+            end;
+        {error, Reason, Req1} ->
+            {ok, cowboy_req:reply(400, media_ct(),
+                json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
     end.
 
 %%====================================================================
@@ -1132,6 +1143,24 @@ forbidden(Req) ->
     cowboy_req:reply(403,
         #{<<"content-type">> => <<"application/json">>},
         <<"{\"error\":\"not found\"}">>, Req).
+
+%% @doc Real client IP: the Cloudflare `cf-connecting-ip' header when present
+%% (Emquest sits behind the tunnel), else the direct peer address.
+-spec client_ip(cowboy_req:req()) -> binary().
+client_ip(Req) ->
+    case cowboy_req:header(<<"cf-connecting-ip">>, Req, undefined) of
+        undefined ->
+            {IP, _Port} = cowboy_req:peer(Req),
+            list_to_binary(inet:ntoa(IP));
+        Ip -> Ip
+    end.
+
+%% @private 429 reply for a throttled route.
+too_many(Req, Tag) ->
+    {ok, cowboy_req:reply(429,
+        #{<<"content-type">> => <<"application/json">>,
+          <<"retry-after">>  => <<"10">>},
+        <<"{\"error\":\"rate limited\"}">>, Req), Tag}.
 
 %% @doc Response headers for HTML pages: strict CSP + hardening.
 %% `img-src` allows self + https (peer thumbnails are proxied/https only);
