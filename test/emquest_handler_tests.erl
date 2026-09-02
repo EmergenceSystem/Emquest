@@ -28,12 +28,12 @@ normalise_item_non_media_unchanged_test() ->
     ?assertEqual(false, maps:is_key(<<"media_type">>, Item)),
     ?assertEqual(<<"http://x">>, maps:get(<<"url">>, Item)).
 
-sanitize_escapes_html_in_label_test() ->
-    In  = #{<<"properties">> => #{<<"title">> => <<"<script>alert(1)</script>">>,
+sanitize_passes_text_through_unescaped_test() ->
+    In  = #{<<"properties">> => #{<<"title">> => <<"AT&T <b>x</b>">>,
                                   <<"resume">> => <<"a & b < c">>}},
     Out = emquest_handler:normalise_item(In),
-    ?assertEqual(<<"&lt;script&gt;alert(1)&lt;/script&gt;">>, maps:get(<<"label">>, Out)),
-    ?assertEqual(<<"a &amp; b &lt; c">>, maps:get(<<"value">>, Out)).
+    ?assertEqual(<<"AT&T <b>x</b>">>, maps:get(<<"label">>, Out)),
+    ?assertEqual(<<"a & b < c">>, maps:get(<<"value">>, Out)).
 
 sanitize_drops_javascript_url_test() ->
     In  = #{<<"properties">> => #{<<"title">> => <<"x">>,
@@ -87,3 +87,17 @@ client_ip_prefers_cf_header_test() ->
 client_ip_falls_back_to_peer_test() ->
     Req = #{headers => #{}, peer => {{1,2,3,4}, 5555}},
     ?assertEqual(<<"1.2.3.4">>, emquest_handler:client_ip(Req)).
+
+cap_utf8_no_split_test() ->
+    %% 200 CJK chars = 600 bytes; capping value at 2048 is fine, but cap label at 256.
+    %% unicode:characters_to_binary/1 (not list_to_binary/1, which only accepts
+    %% byte values 0-255) UTF-8-encodes the 200 duplicated codepoints.
+    Label = unicode:characters_to_binary(lists:duplicate(200, "水")), %% 600 bytes
+    In  = #{<<"properties">> => #{<<"title">> => Label}},
+    Out = emquest_handler:normalise_item(In),
+    L   = maps:get(<<"label">>, Out),
+    ?assert(byte_size(L) =< 256),
+    %% result must be valid UTF-8 (round-trips) — would fail if a codepoint was split
+    ?assertMatch(Bin when is_binary(Bin), unicode:characters_to_binary(L, utf8, utf8)),
+    %% and it must JSON-encode without crashing
+    ?assertMatch(Enc when is_binary(Enc) orelse is_list(Enc), json:encode(#{<<"l">> => L})).

@@ -755,8 +755,8 @@ normalise_item(Item) ->
     Value = first_defined(Props, [<<"resume">>, <<"value">>,
                                   <<"description">>],              <<>>),
     Ips   = first_defined(Props, [<<"ips">>],                      null),
-    Base0 = #{<<"label">> => html_escape(cap(Label, 256)),
-              <<"value">> => html_escape(cap(Value, 2048)),
+    Base0 = #{<<"label">> => cap(Label, 256),
+              <<"value">> => cap(Value, 2048),
               <<"score">> => Score, <<"type">>  => Type},
     Base1 = add_media(Base0, Props),
     Base  = case maps:get(<<"doc_type">>, Props, undefined) of
@@ -771,7 +771,10 @@ normalise_item(Item) ->
 
 %% @private Copy media fields into the item when the embryo declares a media_type.
 %% Non-media embryos are returned unchanged. URL-shaped fields are scheme-
-%% filtered (http/https only); text fields are HTML-escaped and length-capped.
+%% filtered (http/https only); text fields are length-capped. Not HTML-escaped
+%% here — the browser renderers (emergence.js/drift.js/network.js) escape every
+%% field via escHtml/escAttr before innerHTML, which is the real XSS boundary;
+%% escaping again here double-escapes (e.g. "AT&T" -> "AT&amp;T").
 add_media(Base, Props) ->
     case first_defined(Props, [<<"media_type">>], null) of
         null -> Base;
@@ -795,7 +798,7 @@ add_media(Base, Props) ->
                   case maps:get(K, Props, undefined) of
                       undefined -> Acc;
                       null      -> Acc;
-                      V when is_binary(V) -> Acc#{K => html_escape(cap(V, 256))};
+                      V when is_binary(V) -> Acc#{K => cap(V, 256)};
                       V         -> Acc#{K => V}
                   end
               end, Acc1, TextKeys)
@@ -809,18 +812,6 @@ first_defined(Props, [Key | Rest], Default) ->
         V         -> V
     end.
 
-%% @private HTML-escape a binary so peer text cannot inject markup when rendered.
-html_escape(B) when is_binary(B) ->
-    << (esc_char(C)) || <<C>> <= B >>;
-html_escape(X) -> X.
-
-esc_char($&) -> <<"&amp;">>;
-esc_char($<) -> <<"&lt;">>;
-esc_char($>) -> <<"&gt;">>;
-esc_char($") -> <<"&quot;">>;
-esc_char($') -> <<"&#39;">>;
-esc_char(C)  -> <<C>>.
-
 %% @private Return the URL only if scheme is http/https, else null.
 safe_url(null) -> null;
 safe_url(U) when is_binary(U) ->
@@ -830,10 +821,18 @@ safe_url(U) when is_binary(U) ->
     end;
 safe_url(_) -> null.
 
-%% @private Truncate an over-long binary field.
+%% @private Truncate an over-long binary field on a UTF-8 character boundary.
 cap(B, Max) when is_binary(B), byte_size(B) > Max ->
-    binary:part(B, 0, Max);
+    trim_incomplete_utf8(binary:part(B, 0, Max));
 cap(B, _) -> B.
+
+%% @private Drop a trailing partial UTF-8 sequence left by a byte-offset cut.
+trim_incomplete_utf8(B) ->
+    case unicode:characters_to_binary(B, utf8, utf8) of
+        Bin when is_binary(Bin) -> Bin;
+        {incomplete, Valid, _}  -> Valid;
+        {error, Valid, _}       -> Valid
+    end.
 
 %%====================================================================
 %% Disco HTTP
