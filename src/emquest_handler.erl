@@ -64,7 +64,8 @@ init(Req0, index) ->
             logger:error("[emquest] index.html read failed: ~p", [R]),
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
-    {ok, cowboy_req:reply(Code, security_headers(CT, app_script_extra()), Body, Req0), index};
+    %% index (Terminal Glass) has no inline handlers → strict script-src 'self'.
+    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), index};
 
 init(Req0, drift) ->
     Path = filename:join([code:priv_dir(emquest), "templates", "drift.html"]),
