@@ -50,6 +50,7 @@
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0,
          client_ip/1, response_ok/2]).
+-export([trust_tier/1, peer_admin_json/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -205,7 +206,32 @@ init(Req0, stt) ->
         _ ->
             {ok, cowboy_req:reply(405, media_ct(),
                 <<"{\"error\":\"Use POST\"}">>, Req0), stt}
-    end.
+    end;
+
+%% /admin — static shell page (ungated shell; the DATA endpoints below are gated).
+init(Req0, admin_index) ->
+    Path = filename:join([code:priv_dir(emquest), "templates", "admin.html"]),
+    {Code, Body, CT} = case file:read_file(Path) of
+        {ok, Bin} -> {200, Bin, <<"text/html">>};
+        {error, _} -> {500, <<"admin.html missing">>, <<"text/plain">>}
+    end,
+    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), admin_index};
+
+%% /admin/peers — gated JSON peer list with trust tier + banned flag.
+init(Req0, admin_peers) ->
+    case admin_auth(Req0) of
+        {ok, _Name} ->
+            Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+            List = [peer_admin_json(P) || P <- Peers],
+            {ok, cowboy_req:reply(200,
+                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
+                iolist_to_binary(json:encode(List)), Req0), admin_peers};
+        _ -> {ok, unauthorized(Req0), admin_peers}
+    end;
+
+init(Req0, admin_ban)   -> admin_action(Req0, ban);
+init(Req0, admin_unban) -> admin_action(Req0, unban);
+init(Req0, admin_trust) -> admin_action(Req0, trust).
 
 stt_do(Req0) ->
     case read_upload(Req0) of
@@ -1194,6 +1220,85 @@ client_ip(Req) ->
             list_to_binary(inet:ntoa(IP));
         Ip -> Ip
     end.
+
+%%====================================================================
+%% Admin console
+%%====================================================================
+
+%% @private Extract the bearer token and authenticate the admin. Returns
+%% {ok, Name} or {error, _} to short-circuit with a 401.
+admin_auth(Req) ->
+    Tok = case cowboy_req:header(<<"authorization">>, Req, undefined) of
+              <<"Bearer ", T/binary>> -> T;
+              _ -> undefined
+          end,
+    emquest_admin:authenticate(Tok, client_ip(Req)).
+
+%% @private 401 JSON reply for a missing/invalid admin token.
+unauthorized(Req) ->
+    cowboy_req:reply(401, #{<<"content-type">> => <<"application/json">>},
+        <<"{\"error\":\"unauthorized\"}">>, Req).
+
+%% @private Build the admin JSON view of one peer map. `emquest_pop:all_peers/0'
+%% returns maps built by `em_pop_node:peer_to_map/1', which always carries
+%% atom keys `id' (16-byte binary) and `trust' (float) — no binary-key
+%% fallback is needed, but it's kept defensively cheap in case that shape
+%% ever changes.
+peer_admin_json(P) ->
+    Id    = maps:get(id, P, maps:get(<<"id">>, P, undefined)),
+    Name  = maps:get(name, P, maps:get(<<"name">>, P, <<>>)),
+    Trust = maps:get(trust, P, maps:get(<<"trust">>, P, 0.0)),
+    QP    = maps:get(query_port, P, maps:get(<<"query_port">>, P, undefined)),
+    IdB64 = case Id of undefined -> null; _ when is_binary(Id) -> base64:encode(Id); _ -> null end,
+    #{<<"id">>    => IdB64,
+      <<"name">>  => Name,
+      <<"trust">> => Trust,
+      <<"tier">>  => trust_tier(Trust),
+      <<"query_port">> => case QP of undefined -> null; _ -> QP end,
+      <<"banned">> => case IdB64 of null -> false; _ -> (catch em_pop_store:is_banned(Id)) =:= true end}.
+
+%% @private Coarse trust bucket used to colour the admin peer table.
+trust_tier(T) when is_number(T), T < 0.10 -> <<"excluded">>;
+trust_tier(T) when is_number(T), T < 0.40 -> <<"quarantine">>;
+trust_tier(_) -> <<"normal">>.
+
+%% @private Gated POST action (ban/unban/trust). Body: {"id":"<base64 id>", ...}.
+%% For `trust' also `"trust":Float'.
+admin_action(Req0, Kind) ->
+    case admin_auth(Req0) of
+        {ok, Name} ->
+            {ok, Body, Req1} = cowboy_req:read_body(Req0),
+            M = try json:decode(Body) catch _:_ -> #{} end,
+            Tag = list_to_atom("admin_" ++ atom_to_list(Kind)),
+            case maps:get(<<"id">>, M, undefined) of
+                IdB64 when is_binary(IdB64) ->
+                    Id = base64:decode(IdB64),
+                    Res = do_admin(Kind, Id, M),
+                    emquest_admin:audit(Name, atom_to_binary(Kind, utf8), IdB64),
+                    {ok, cowboy_req:reply(200, #{<<"content-type">> => <<"application/json">>},
+                        iolist_to_binary(json:encode(#{<<"ok">> => true, <<"result">> => fmt_res(Res)})), Req1),
+                        Tag};
+                _ ->
+                    {ok, cowboy_req:reply(400, #{<<"content-type">> => <<"application/json">>},
+                        <<"{\"error\":\"missing id\"}">>, Req1), Tag}
+            end;
+        _ ->
+            Tag = list_to_atom("admin_" ++ atom_to_list(Kind)),
+            {ok, unauthorized(Req0), Tag}
+    end.
+
+%% @private Dispatch one admin peer action to `emquest_pop'.
+do_admin(ban, Id, M)   -> emquest_pop:ban(Id, maps:get(<<"reason">>, M, <<"admin">>));
+do_admin(unban, Id, _) -> emquest_pop:unban(Id);
+do_admin(trust, Id, M) ->
+    case maps:get(<<"trust">>, M, undefined) of
+        T when is_number(T) -> emquest_pop:set_trust(Id, T * 1.0);
+        _ -> {error, missing_trust}
+    end.
+
+%% @private Render an admin action result as a JSON-safe string.
+fmt_res(ok) -> <<"ok">>;
+fmt_res(Other) -> iolist_to_binary(io_lib:format("~p", [Other])).
 
 %% @private 429 reply for a throttled route.
 too_many(Req, Tag) ->

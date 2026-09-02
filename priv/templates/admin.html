@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emquest &middot; Admin</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:        #0f1115;
+            --surface:   #161a22;
+            --border:    #232733;
+            --green:     #3ddc84;
+            --amber:     #f5a623;
+            --red:       #e5484d;
+            --muted:     #8b93a7;
+            --text:      #e6e6e6;
+            --font:      ui-monospace, 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+        }
+
+        body {
+            background: var(--bg); color: var(--text);
+            font: 14px/1.5 var(--font);
+            min-height: 100vh;
+            padding: 2rem 1.5rem 4rem;
+        }
+
+        .page { max-width: 1000px; margin: 0 auto; }
+
+        h1 {
+            font-size: 1.1rem; font-weight: 600;
+            letter-spacing: 0.08em; color: var(--green);
+            margin-bottom: 1.25rem;
+        }
+
+        .authbar {
+            display: flex; gap: 0.5rem; align-items: center;
+            flex-wrap: wrap;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.9rem 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .authbar label { color: var(--muted); font-size: 0.75rem; }
+
+        input[type="password"], input[type="text"] {
+            background: var(--bg); color: var(--text);
+            border: 1px solid var(--border); border-radius: 5px;
+            padding: 0.45rem 0.6rem;
+            font: inherit;
+            flex: 1 1 260px;
+            min-width: 180px;
+        }
+
+        button {
+            background: var(--surface); color: var(--text);
+            border: 1px solid var(--border); border-radius: 5px;
+            padding: 0.45rem 0.9rem;
+            font: inherit; cursor: pointer;
+        }
+        button:hover { border-color: var(--green); color: var(--green); }
+        button.danger:hover { border-color: var(--red); color: var(--red); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        #status-msg { font-size: 0.75rem; color: var(--muted); }
+        #status-msg.err { color: var(--red); }
+        #status-msg.ok  { color: var(--green); }
+
+        table {
+            width: 100%; border-collapse: collapse;
+            background: var(--surface);
+            border: 1px solid var(--border); border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            text-align: left; padding: 0.55rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem;
+        }
+        th {
+            color: var(--muted); font-weight: 600;
+            font-size: 0.68rem; letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        tr:last-child td { border-bottom: none; }
+        td.mono { font-size: 0.72rem; color: var(--muted); word-break: break-all; }
+
+        .tier { font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 3px; letter-spacing: 0.04em; }
+        .tier-normal     { color: var(--green); background: rgba(61,220,132,0.1); }
+        .tier-quarantine { color: var(--amber); background: rgba(245,166,35,0.1); }
+        .tier-excluded   { color: var(--red);   background: rgba(229,72,77,0.1); }
+
+        .badge-banned { color: var(--red); font-size: 0.7rem; }
+
+        .row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+        .row-actions input[type="text"] { min-width: 70px; flex: 0 0 70px; padding: 0.3rem 0.4rem; }
+        .row-actions button { padding: 0.3rem 0.6rem; font-size: 0.72rem; }
+
+        .empty { color: var(--muted); padding: 1.5rem; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="page">
+    <h1>EMQUEST &middot; ADMIN</h1>
+
+    <div class="authbar">
+        <label for="token">Bearer token</label>
+        <input type="password" id="token" placeholder="admin token" autocomplete="off">
+        <button id="load-btn">Load</button>
+        <span id="status-msg"></span>
+    </div>
+
+    <table id="peer-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>ID</th>
+                <th>Trust</th>
+                <th>Tier</th>
+                <th>Port</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="peer-rows">
+            <tr><td colspan="7" class="empty">Enter a token and click Load.</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>

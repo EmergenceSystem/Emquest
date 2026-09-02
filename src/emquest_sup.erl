@@ -15,6 +15,11 @@
 %%% GET  /preview         → emquest_handler (URL description proxy)
 %%% GET  /network         → emquest_handler (serves network.html)
 %%% GET  /network/peers   → emquest_handler (JSON peer list)
+%%% GET  /admin            → emquest_handler (admin shell page)
+%%% GET  /admin/peers      → emquest_handler (gated JSON peer list)
+%%% POST /admin/ban        → emquest_handler (gated: ban a peer)
+%%% POST /admin/unban      → emquest_handler (gated: unban a peer)
+%%% POST /admin/trust      → emquest_handler (gated: set peer trust)
 %%% GET  /favicon.ico     → cowboy_static   (priv/static/favicon.ico)
 %%% GET  /static/[...]    → cowboy_static   (priv/static/)
 %%% '''
@@ -70,6 +75,11 @@ init([]) ->
                     {"/health",         emquest_handler, health},
                     {"/status",         emquest_handler, status},
                     {"/stt",            emquest_handler, stt},
+                    {"/admin",          emquest_handler, admin_index},
+                    {"/admin/peers",    emquest_handler, admin_peers},
+                    {"/admin/ban",      emquest_handler, admin_ban},
+                    {"/admin/unban",    emquest_handler, admin_unban},
+                    {"/admin/trust",    emquest_handler, admin_trust},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}
