@@ -28,7 +28,7 @@
 %%%-------------------------------------------------------------------
 -module(emquest_cli).
 
--export([query/1]).
+-export([query/1, ban/1, unban/1]).
 
 %%--------------------------------------------------------------------
 %% @doc Queries em_disco via HTTP and prints results to stdout.
@@ -47,6 +47,36 @@ query(Search) when is_binary(Search) ->
             handle_response(RespBody);
         {error, Reason} ->
             io:format("[emquest] error: ~p~n", [Reason])
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc Ban a peer by id from the em_pop peer table.
+%% Accepts binary or string input.
+%% @end
+%%--------------------------------------------------------------------
+-spec ban(binary() | string()) -> ok.
+ban(PeerId) ->
+    Id = iolist_to_binary(PeerId),
+    case emquest_pop:ban(Id, <<"cli">>) of
+        ok ->
+            io:format("[emquest] banned ~s~n", [Id]);
+        {error, Reason} ->
+            io:format("[emquest] ban failed for ~s: ~p~n", [Id, Reason])
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc Lift a ban on a peer by id.
+%% Accepts binary or string input.
+%% @end
+%%--------------------------------------------------------------------
+-spec unban(binary() | string()) -> ok.
+unban(PeerId) ->
+    Id = iolist_to_binary(PeerId),
+    case emquest_pop:unban(Id) of
+        ok ->
+            io:format("[emquest] unbanned ~s~n", [Id]);
+        {error, Reason} ->
+            io:format("[emquest] unban failed for ~s: ~p~n", [Id, Reason])
     end.
 
 %%====================================================================
