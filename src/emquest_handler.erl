@@ -47,7 +47,8 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1]).
+-export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
+         security_headers/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -97,7 +98,7 @@ init(Req0, network) ->
             logger:error("[emquest] network.html read failed: ~p", [R]),
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
-    {ok, cowboy_req:reply(Code, #{<<"content-type">> => CT}, Body, Req0), network};
+    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network};
 
 init(Req0, network_peers) ->
     Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
@@ -138,9 +139,8 @@ init(Req0, health) ->
     }, Body, Req0), health};
 
 init(Req0, status) ->
-    {ok, cowboy_req:reply(200, #{
-        <<"content-type">> => <<"text/html; charset=utf-8">>
-    }, status_page(), Req0), status};
+    {ok, cowboy_req:reply(200, security_headers(<<"text/html; charset=utf-8">>),
+        status_page(), Req0), status};
 
 init(Req0, query) ->
     case cowboy_req:method(Req0) of
@@ -1108,6 +1108,25 @@ truncate(B, Max) ->
 nn(undefined) -> null;
 nn(V)         -> V.
 
+%% @doc Response headers for HTML pages: strict CSP + hardening.
+%% `img-src` allows self + https (peer thumbnails are proxied/https only);
+%% no inline or third-party script is permitted. `style-src'/`font-src' carry
+%% an explicit allowance for fonts.googleapis.com/fonts.gstatic.com because
+%% every template (index/drift/network) links Google Fonts — without it the
+%% given base policy would silently break font loading on every HTML page.
+-spec security_headers(binary()) -> map().
+security_headers(ContentType) ->
+    #{<<"content-type">>            => ContentType,
+      <<"content-security-policy">> =>
+          <<"default-src 'self'; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' https: data:; media-src 'self' https:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,
+      <<"x-content-type-options">>  => <<"nosniff">>,
+      <<"x-frame-options">>         => <<"DENY">>,
+      <<"referrer-policy">>         => <<"no-referrer">>}.
+
 %% @private Self-contained health dashboard; fetches /health and renders.
 status_page() ->
     <<"<!doctype html><html><head><meta charset=utf-8>"
@@ -1133,23 +1152,8 @@ status_page() ->
       "<table><thead><tr><th>filter</th><th>endpoint</th>"
       "<th class=num>latency</th><th class=num>fails</th></tr></thead>"
       "<tbody id=rows></tbody></table>"
-      "<script>"
-      "async function load(){"
-      "let d=await (await fetch('/health')).json();"
-      "document.getElementById('pc').textContent=d.peer_count;"
-      "document.getElementById('ac').textContent=d.alive_count;"
-      "let c=d.cache||{};"
-      "document.getElementById('cache').textContent=(c.l1_hits||0)+'/'+(c.l2_hits||0)+'/'+(c.misses||0);"
-      "document.getElementById('redis').textContent=c.redis?'on':'off';"
-      "document.getElementById('ts').textContent=new Date().toLocaleTimeString();"
-      "let ps=(d.peers||[]).slice().sort((a,b)=>(a.alive-b.alive)||(a.name>b.name?1:-1));"
-      "document.getElementById('rows').innerHTML=ps.map(p=>"
-      "'<tr><td><span class=\"dot '+(p.alive?'up':'down')+'\"></span>'+(p.name||'?')+"
-      "'</td><td class=muted>'+(p.host||'')+':'+(p.port==null?'-':p.port)+"
-      "'</td><td class=num>'+(p.latency==null?'-':p.latency+' ms')+"
-      "'</td><td class=num>'+(p.fails||0)+'</td></tr>').join('');}"
-      "load();setInterval(load,10000);"
-      "</script></body></html>">>.
+      "<script src=\"/static/status.js\"></script>"
+      "</body></html>">>.
 
 -spec sse(cowboy_req:req(), atom(), binary()) -> ok.
 sse(Req, Type, Message) ->

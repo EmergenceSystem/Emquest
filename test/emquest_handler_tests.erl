@@ -55,3 +55,11 @@ sanitize_drops_bad_media_url_test() ->
     Out = emquest_handler:normalise_item(In),
     ?assertEqual(error, maps:find(<<"media_url">>, Out)),
     ?assertEqual(<<"https://ok.example/t.png">>, maps:get(<<"thumbnail">>, Out)).
+
+security_headers_present_test() ->
+    H = emquest_handler:security_headers(<<"text/html">>),
+    ?assertEqual(<<"text/html">>, maps:get(<<"content-type">>, H)),
+    CSP = maps:get(<<"content-security-policy">>, H),
+    ?assertNotEqual(nomatch, binary:match(CSP, <<"default-src 'self'">>)),
+    ?assertEqual(<<"nosniff">>, maps:get(<<"x-content-type-options">>, H)),
+    ?assertEqual(<<"DENY">>,    maps:get(<<"x-frame-options">>, H)).
