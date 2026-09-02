@@ -54,6 +54,7 @@
 -export([get_id/1, get_vector/1, add_peer/3, get_peers/1,
          peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2,
          ban/3, unban/2, is_banned/2, set_trust/3]).
+-export([credit/2, penalize/2]).
 -export([accept_peer/1, test_peer/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -215,6 +216,14 @@ is_banned(Pid, PeerId) -> gen_server:call(Pid, {is_banned, PeerId}).
 %% and persist it.
 -spec set_trust(pid(), binary(), float()) -> ok.
 set_trust(Pid, PeerId, Trust) -> gen_server:call(Pid, {set_trust, PeerId, Trust}).
+
+%% @doc Asynchronously raise a peer's trust after a good query response.
+-spec credit(pid(), binary()) -> ok.
+credit(Pid, PeerId) -> gen_server:cast(Pid, {credit, PeerId}).
+
+%% @doc Asynchronously lower a peer's trust after a failed query.
+-spec penalize(pid(), binary()) -> ok.
+penalize(Pid, PeerId) -> gen_server:cast(Pid, {penalize, PeerId}).
 
 %%--------------------------------------------------------------------
 %% @doc Trigger one synchronous gossip tick.
@@ -475,6 +484,22 @@ handle_call({handle_gossip, InPayload}, _From, State) ->
 handle_call(_Msg, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Async trust signals from a query-response outcome (not gossip).
+%%
+%% `credit' rewards a peer that answered a fan-out query well;
+%% `penalize' punishes one that errored/timed out. This closes the gap
+%% for leaf filters that are only ever learned transitively via the
+%% disco hub's gossip and never gossip directly, so their trust would
+%% otherwise never move off its seeded value.
+%% @end
+%%--------------------------------------------------------------------
+handle_cast({credit, PeerId}, #state{peers = Peers} = State) ->
+    {noreply, adjust_trust(PeerId, ?TRUST_INCREMENT, Peers, State)};
+handle_cast({penalize, PeerId}, #state{peers = Peers} = State) ->
+    {noreply, adjust_trust(PeerId, -?TRUST_DECAY, Peers, State)};
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -676,6 +701,28 @@ decay_trust(PeerId, #state{peers = Peers} = State) ->
             State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
         error ->
             %% Peer disappeared between the spawn and the result — ignore.
+            State
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Adjust one peer's trust by Delta, clamped to [TRUST_MIN, TRUST_MAX]
+%% and write-through persisted. Used by the async `credit'/`penalize'
+%% API — the query-response counterpart to `decay_trust'/`mark_failure',
+%% which only fire on direct gossip exchanges.
+%%
+%% Unknown peer ids are ignored (State returned unchanged): a query
+%% result can race a peer's eviction.
+%% @end
+%%--------------------------------------------------------------------
+-spec adjust_trust(binary(), float(), #{binary() => #peer{}}, #state{}) -> #state{}.
+adjust_trust(PeerId, Delta, Peers, State) ->
+    case maps:find(PeerId, Peers) of
+        {ok, #peer{trust = T, last_seen = LS} = Peer} ->
+            NewTrust = max(?TRUST_MIN, min(?TRUST_MAX, T + Delta)),
+            catch em_pop_store:put_trust(PeerId, NewTrust, LS),
+            State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
+        error ->
             State
     end.
 

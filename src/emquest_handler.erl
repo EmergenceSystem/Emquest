@@ -1016,14 +1016,20 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         QP    = maps:get(query_port, PeerMap),
         Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
         BP    = binary_to_list(maps:get(base_path, PeerMap, <<>>)),
+        Id    = maps:get(id, PeerMap, undefined),
         Url   = lists:flatten(
                     agent_query_url(H, QP, BP)),
         Body  = iolist_to_binary(json:encode(#{<<"query">> => Q})),
         Tag   = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
         case fetch_from_agent(Body, Url) of
             {ok, Items} ->
+                case Items of
+                    [_|_] when is_binary(Id) -> catch emquest_pop:credit(Id);
+                    _ -> ok
+                end,
                 Parent ! {disco_result, self(), Tag, Q, Items, Trust};
             {error, R} ->
+                (is_binary(Id) andalso catch emquest_pop:penalize(Id)),
                 logger:warning("[emquest] pop agent fail ~s: ~p", [Tag, R]),
                 Parent ! {disco_result, self(), Tag, Q, [], Trust}
         end

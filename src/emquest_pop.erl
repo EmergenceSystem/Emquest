@@ -37,6 +37,7 @@
 
 -export([start_link/0, peers_for_query/2, all_peers/0]).
 -export([ban/2, unban/1, set_trust/2]).
+-export([credit/1, penalize/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Maximum number of peers this node maintains.
@@ -110,6 +111,24 @@ unban(PeerId) -> gen_server:call(?MODULE, {unban, PeerId}, 5_000).
 -spec set_trust(binary(), float()) -> ok | {error, degraded}.
 set_trust(PeerId, Trust) -> gen_server:call(?MODULE, {set_trust, PeerId, Trust}, 5_000).
 
+%%--------------------------------------------------------------------
+%% @doc Asynchronously raise PeerId's trust after a good query response.
+%%
+%% No-op (silently degraded) when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec credit(binary()) -> ok.
+credit(PeerId) -> gen_server:cast(?MODULE, {credit, PeerId}).
+
+%%--------------------------------------------------------------------
+%% @doc Asynchronously lower PeerId's trust after a failed query.
+%%
+%% No-op (silently degraded) when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec penalize(binary()) -> ok.
+penalize(PeerId) -> gen_server:cast(?MODULE, {penalize, PeerId}).
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -181,6 +200,11 @@ handle_call({set_trust, PeerId, Trust}, _From, #{node := Node} = State) ->
 
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
+
+handle_cast({credit, Id}, #{node := Node} = S) when is_pid(Node) ->
+    em_pop_node:credit(Node, Id), {noreply, S};
+handle_cast({penalize, Id}, #{node := Node} = S) when is_pid(Node) ->
+    em_pop_node:penalize(Node, Id), {noreply, S};
 
 handle_cast(_Msg, State) -> {noreply, State}.
 handle_info(_Msg, State) -> {noreply, State}.
