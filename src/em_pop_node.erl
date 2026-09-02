@@ -52,7 +52,8 @@
 
 -export([start_link/1]).
 -export([get_id/1, get_vector/1, add_peer/3, get_peers/1,
-         peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2]).
+         peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2,
+         ban/3, unban/2, is_banned/2, set_trust/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %%====================================================================
@@ -127,7 +128,8 @@
     seeds = []                  :: [{string(), inet:port_number()}],  %% bootstrap/heal seeds
     quarantine = #{}            :: #{binary() => integer()},          %% dead peer id => expiry (mono ms)
     dead_threshold = 3          :: pos_integer(),                     %% failed contacts before dead
-    quarantine_ttl = 60000      :: pos_integer()                     %% ms a dead peer is refused
+    quarantine_ttl = 60000      :: pos_integer(),                     %% ms a dead peer is refused
+    banned = #{}                :: #{binary() => true}                %% persisted-ban set (by peer id)
 }).
 
 %%====================================================================
@@ -192,6 +194,24 @@ peers_for(Pid, Vec, K) -> gen_server:call(Pid, {peers_for, Vec, K}).
 %% @doc Return the trust score for PeerId (0.0 if unknown, 1.0 if fully trusted).
 -spec get_trust(pid(), binary()) -> float().
 get_trust(Pid, PeerId) -> gen_server:call(Pid, {get_trust, PeerId}).
+
+%% @doc Ban a peer: evict it immediately and persist the ban so it is
+%% refused re-entry (even across a node restart, when a state_file is set).
+-spec ban(pid(), binary(), binary()) -> ok.
+ban(Pid, PeerId, Reason) -> gen_server:call(Pid, {ban, PeerId, Reason}).
+
+%% @doc Lift a ban on PeerId.
+-spec unban(pid(), binary()) -> ok.
+unban(Pid, PeerId) -> gen_server:call(Pid, {unban, PeerId}).
+
+%% @doc Return whether PeerId is currently banned.
+-spec is_banned(pid(), binary()) -> boolean().
+is_banned(Pid, PeerId) -> gen_server:call(Pid, {is_banned, PeerId}).
+
+%% @doc Force-set a peer's trust score (clamped to [TRUST_MIN, TRUST_MAX])
+%% and persist it.
+-spec set_trust(pid(), binary(), float()) -> ok.
+set_trust(Pid, PeerId, Trust) -> gen_server:call(Pid, {set_trust, PeerId, Trust}).
 
 %%--------------------------------------------------------------------
 %% @doc Trigger one synchronous gossip tick.
@@ -258,6 +278,10 @@ init(Opts) ->
 
     %% httpc lives inside the inets application — start it if not yet up.
     application:ensure_all_started(inets),
+    %% cowboy (and its ranch dependency) back the gossip HTTP listener —
+    %% normally already running as part of the emquest app's supervision
+    %% tree, but standalone eunit tests start em_pop_node in isolation.
+    application:ensure_all_started(cowboy),
 
     %% Start the Cowboy listener that will accept incoming gossip POSTs.
     ok = start_listener(Port, self()),
@@ -273,6 +297,20 @@ init(Opts) ->
 
     ?LOG_INFO("em_pop node started id=~s port=~w", [short_id(Id), Port]),
 
+    %% Open the persistent reputation store (if configured) and load the
+    %% ban list into memory so is_banned/2 stays a cheap map lookup.
+    Banned = case maps:get(state_file, Opts, undefined) of
+        undefined -> #{};
+        StateFile ->
+            ok = filelib:ensure_dir(StateFile),
+            case em_pop_store:open(StateFile) of
+                {ok, _} -> maps:map(fun(_, _) -> true end, em_pop_store:all_bans());
+                {error, R} ->
+                    ?LOG_WARNING("[em_pop] store open failed ~p: ~p", [StateFile, R]),
+                    #{}
+            end
+    end,
+
     {ok, #state{
         id              = Id,
         port            = Port,
@@ -285,7 +323,8 @@ init(Opts) ->
         max_peers       = MaxP,
         seeds           = Seeds,
         dead_threshold  = DeadT,
-        quarantine_ttl  = QTtl
+        quarantine_ttl  = QTtl,
+        banned          = Banned
     }}.
 
 %% --- Simple state accessors ---
@@ -353,6 +392,34 @@ handle_call({get_trust, PeerId}, _From, #state{peers = Peers} = State) ->
         error                  -> 0.0   %% unknown peer → lowest possible trust
     end,
     {reply, Trust, State};
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Ban / unban / query-ban-status / force-set-trust.
+%%
+%% These persist to em_pop_store when a state_file was configured; the
+%% store call is `catch'-guarded so a closed/absent store never crashes
+%% the node (e.g. every existing test that omits state_file).
+%% @end
+%%--------------------------------------------------------------------
+handle_call({ban, PeerId, Reason}, _From, #state{peers = Peers, banned = B} = State) ->
+    catch em_pop_store:ban(PeerId, Reason),
+    {reply, ok, State#state{peers = maps:remove(PeerId, Peers), banned = B#{PeerId => true}}};
+
+handle_call({unban, PeerId}, _From, #state{banned = B} = State) ->
+    catch em_pop_store:unban(PeerId),
+    {reply, ok, State#state{banned = maps:remove(PeerId, B)}};
+
+handle_call({is_banned, PeerId}, _From, #state{banned = B} = State) ->
+    {reply, maps:is_key(PeerId, B), State};
+
+handle_call({set_trust, PeerId, Trust}, _From, #state{peers = Peers} = State) ->
+    T = max(?TRUST_MIN, min(?TRUST_MAX, Trust)),
+    catch em_pop_store:put_trust(PeerId, T, erlang:monotonic_time(millisecond)),
+    case maps:find(PeerId, Peers) of
+        {ok, Peer} -> {reply, ok, State#state{peers = Peers#{PeerId => Peer#peer{trust = T}}}};
+        error      -> {reply, ok, State}
+    end;
 
 %% Synchronous gossip tick — no-op when there are no peers yet.
 handle_call(gossip_tick, _From, #state{peers = Peers} = State)
@@ -508,6 +575,10 @@ pick_gossip_target(#state{peers = Peers}) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec upsert_peer(#peer{}, #state{}) -> #state{}.
+upsert_peer(#peer{id = Id}, #state{banned = Banned} = State)
+        when is_map_key(Id, Banned) ->
+    %% Refuse a banned id outright — no insert, no reindex.
+    State;
 upsert_peer(#peer{id = Id} = New,
             #state{peers = Peers, kvex_ix = Ix} = State) ->
     {Trust, NeedsReindex} = case maps:find(Id, Peers) of
@@ -518,8 +589,16 @@ upsert_peer(#peer{id = Id} = New,
         error ->
             %% First contact — insert vector into the index immediately.
             kvex:add(Ix, Id, New#peer.vector),
-            {?TRUST_INIT, false}
+            %% Prefer a trust score persisted from a previous session over
+            %% the default TRUST_INIT.
+            Seed = case catch em_pop_store:get_trust(Id) of
+                       {T0, _} when is_float(T0) -> T0;
+                       _ -> ?TRUST_INIT
+                   end,
+            {Seed, false}
     end,
+    Now = erlang:monotonic_time(millisecond),
+    catch em_pop_store:put_trust(Id, Trust, Now),
     Q1 = maps:remove(Id, State#state.quarantine),
     case NeedsReindex of
         true ->
@@ -529,14 +608,14 @@ upsert_peer(#peer{id = Id} = New,
                 peers = Peers#{Id => New#peer{
                     trust      = Trust,
                     fail_count = 0,
-                    last_seen  = erlang:monotonic_time(millisecond)
+                    last_seen  = Now
                 }}
             });
         false ->
             Updated = New#peer{
                 trust      = Trust,
                 fail_count = 0,
-                last_seen  = erlang:monotonic_time(millisecond)
+                last_seen  = Now
             },
             State#state{quarantine = Q1, peers = Peers#{Id => Updated}}
     end.
@@ -552,8 +631,9 @@ upsert_peer(#peer{id = Id} = New,
 -spec decay_trust(binary(), #state{}) -> #state{}.
 decay_trust(PeerId, #state{peers = Peers} = State) ->
     case maps:find(PeerId, Peers) of
-        {ok, #peer{trust = T} = Peer} ->
+        {ok, #peer{trust = T, last_seen = LS} = Peer} ->
             NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
+            catch em_pop_store:put_trust(PeerId, NewTrust, LS),
             State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
         error ->
             %% Peer disappeared between the spawn and the result — ignore.
@@ -579,6 +659,7 @@ mark_failure(PeerId, #state{peers = Peers, quarantine = Q,
                     });
                 false ->
                     NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
+                    catch em_pop_store:put_trust(PeerId, NewTrust, Peer#peer.last_seen),
                     State#state{peers = Peers#{PeerId =>
                         Peer#peer{fail_count = FC1, trust = NewTrust}}}
             end;
@@ -604,6 +685,10 @@ merge_peers([], State) ->
     State;
 merge_peers([#peer{id = Id} | Rest], #state{id = Id} = State) ->
     %% This entry describes ourselves — skip.
+    merge_peers(Rest, State);
+merge_peers([#peer{id = Id} | Rest], #state{banned = Banned} = State)
+        when is_map_key(Id, Banned) ->
+    %% Refuse a banned id — gossip must not re-infect us with it.
     merge_peers(Rest, State);
 merge_peers([P | Rest],
             #state{peers = Peers, max_peers = Max, kvex_ix = Ix,
