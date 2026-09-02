@@ -49,7 +49,7 @@
 
 -export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, app_script_extra/0, internal_exposed/0,
-         client_ip/1]).
+         client_ip/1, response_ok/2]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -889,15 +889,56 @@ fetch_from_agent(Body, Url) ->
                        [{timeout, 8000}], [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, RespBody}} ->
             try
-                #{<<"results">> := Items} = json:decode(RespBody),
-                case is_list(Items) of
+                #{<<"results">> := Items0} = RespMap = json:decode(RespBody),
+                Items = case is_list(Items0) of
+                    true  -> Items0;
+                    false -> []
+                end,
+                case response_ok(RespMap, Items) of
                     true  -> {ok, Items};
-                    false -> {ok, []}
+                    false -> {error, bad_signature}
                 end
             catch _:_ -> {error, invalid_response} end;
         {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
         {error, R}                 -> {error, R}
     end.
+
+%% @doc Whether an unsigned filter response is rejected. Default false
+%% (optional phase): accept unsigned until all filters are upgraded to sign.
+-spec require_signatures() -> boolean().
+require_signatures() ->
+    application:get_env(emquest, require_signatures, false) =:= true.
+
+%% @doc Verify a filter response's signature (if present) against the signer's
+%% bound pubkey. Returns true = keep, false = drop.
+%% - signature + signer_id present, pubkey bound, sig valid   -> true
+%% - signature present but invalid / signer unknown           -> false (drop)
+%% - no signature: require_signatures() ? false : true
+-spec response_ok(map(), list()) -> boolean().
+response_ok(RespMap, Items) ->
+    case {maps:get(<<"signature">>, RespMap, undefined),
+          maps:get(<<"signer_id">>, RespMap, undefined)} of
+        {Sig, SignerId} when is_binary(Sig), is_binary(SignerId) ->
+            case decode_b64(SignerId) of
+                error -> false;
+                Id ->
+                    case catch em_pop_store:get_pubkey(Id) of
+                        Pub when is_binary(Pub) ->
+                            case decode_b64(Sig) of
+                                error -> false;
+                                SigBin ->
+                                    em_pop_crypto:verify(
+                                        em_pop_crypto:canonical_response(Items), SigBin, Pub)
+                            end;
+                        _ -> false   %% no bound pubkey for this signer
+                    end
+            end;
+        _ -> not require_signatures()
+    end.
+
+decode_b64(B) when is_binary(B) ->
+    case catch base64:decode(B) of D when is_binary(D) -> D; _ -> error end;
+decode_b64(_) -> error.
 
 %%--------------------------------------------------------------------
 %% @doc Spawn one worker process per (sub-query × em_pop peer).

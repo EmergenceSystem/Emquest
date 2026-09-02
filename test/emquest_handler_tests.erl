@@ -101,3 +101,31 @@ cap_utf8_no_split_test() ->
     ?assertMatch(Bin when is_binary(Bin), unicode:characters_to_binary(L, utf8, utf8)),
     %% and it must JSON-encode without crashing
     ?assertMatch(Enc when is_binary(Enc) orelse is_list(Enc), json:encode(#{<<"l">> => L})).
+
+response_ok_accepts_valid_signature_test() ->
+    {Pub, Priv} = em_pop_crypto:keypair(),
+    Id = em_pop_crypto:id_of(Pub),
+    catch em_pop_store:close(),
+    Dir = "/tmp/emq_resp_" ++ integer_to_list(erlang:unique_integer([positive])),
+    ok = filelib:ensure_dir(Dir ++ "/x"),
+    {ok, _} = em_pop_store:open(Dir ++ "/s.dets"),
+    em_pop_store:put_pubkey(Id, Pub),
+    Items = [#{<<"url">> => <<"u">>, <<"title">> => <<"t">>, <<"resume">> => <<"r">>}],
+    Sig = em_pop_crypto:sign(em_pop_crypto:canonical_response(Items), Priv),
+    RespMap = #{<<"results">> => Items,
+                <<"signer_id">> => base64:encode(Id),
+                <<"signature">> => base64:encode(Sig)},
+    ?assert(emquest_handler:response_ok(RespMap, Items)),
+    %% tampered items -> reject
+    Tampered = [#{<<"url">> => <<"EVIL">>, <<"title">> => <<"t">>, <<"resume">> => <<"r">>}],
+    ?assertNot(emquest_handler:response_ok(RespMap, Tampered)),
+    em_pop_store:close(), file:delete(Dir ++ "/s.dets").
+
+response_ok_unsigned_tolerated_by_default_test() ->
+    application:unset_env(emquest, require_signatures),
+    ?assert(emquest_handler:response_ok(#{<<"results">> => []}, [])).
+
+response_ok_unsigned_rejected_when_required_test() ->
+    application:set_env(emquest, require_signatures, true),
+    ?assertNot(emquest_handler:response_ok(#{<<"results">> => []}, [])),
+    application:unset_env(emquest, require_signatures).

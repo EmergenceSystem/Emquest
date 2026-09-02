@@ -9,7 +9,7 @@
 %%%-------------------------------------------------------------------
 -module(em_pop_crypto).
 -export([keypair/0, id_of/1, sign/2, verify/3,
-         canonical_identity/1, verify_selfsig/1]).
+         canonical_identity/1, verify_selfsig/1, canonical_response/1]).
 
 -spec keypair() -> {binary(), binary()}.
 keypair() ->
@@ -49,3 +49,28 @@ qp(_) -> 0.
 to_bin(B) when is_binary(B) -> B;
 to_bin(L) when is_list(L)   -> iolist_to_binary(L);
 to_bin(_) -> <<>>.
+
+%% @doc Deterministic bytes over a response's item list. Covers the rendered
+%% fields (url, title/label, resume/value/description) in list order. Byte-
+%% identical to em_filter's em_pop_crypto:canonical_response/1 so signatures verify.
+-spec canonical_response(list()) -> binary().
+canonical_response(Items) when is_list(Items) ->
+    iolist_to_binary([item_line(I) || I <- Items]);
+canonical_response(_) -> <<>>.
+
+item_line(I) when is_map(I) ->
+    P = case maps:get(<<"properties">>, I, undefined) of
+            M when is_map(M) -> M; _ -> I
+        end,
+    U = pick(P, [<<"url">>]),
+    T = pick(P, [<<"title">>, <<"label">>]),
+    R = pick(P, [<<"resume">>, <<"value">>, <<"description">>]),
+    [U, 0, T, 0, R, 10];
+item_line(_) -> [0, 10].
+
+pick(_M, []) -> <<>>;
+pick(M, [K|Ks]) ->
+    case maps:get(K, M, undefined) of
+        V when is_binary(V) -> V;
+        _ -> pick(M, Ks)
+    end.
