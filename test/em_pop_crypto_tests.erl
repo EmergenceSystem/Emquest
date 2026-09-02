@@ -34,5 +34,9 @@ verify_selfsig_test() ->
               query_port => 9101, name => <<"n">>},
     Sig = em_pop_crypto:sign(em_pop_crypto:canonical_identity(Ident), Priv),
     ?assert(em_pop_crypto:verify_selfsig(Ident#{pubkey => Pub, sig => Sig})),
-    ?assertNot(em_pop_crypto:verify_selfsig(Ident#{host => <<"evil">>, pubkey => Pub, sig => Sig})),
+    %% host/port are NOT signed (hubs rewrite them) — changing host stays valid.
+    ?assert(em_pop_crypto:verify_selfsig(Ident#{host => <<"rewritten">>, pubkey => Pub, sig => Sig})),
+    %% name IS signed — tampering it breaks verification.
+    ?assertNot(em_pop_crypto:verify_selfsig(Ident#{name => <<"evil">>, pubkey => Pub, sig => Sig})),
+    %% id must match id_of(pubkey).
     ?assertNot(em_pop_crypto:verify_selfsig(Ident#{id => <<0:128>>, pubkey => Pub, sig => Sig})).

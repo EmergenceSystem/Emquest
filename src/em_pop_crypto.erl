@@ -27,14 +27,16 @@ verify(Msg, Sig, Pub) ->
     try crypto:verify(eddsa, none, Msg, Sig, [Pub, ed25519])
     catch _:_ -> false end.
 
+%% @doc Deterministic bytes over a peer's STABLE identity only (id + name).
+%% host/port/query_port are deliberately excluded: hubs rewrite a leaf's address
+%% (localhost -> public:443) before relaying, which would otherwise break the
+%% self-signature. `id = SHA-256(pubkey)[0:16]` already binds the key to the id,
+%% so signing id+name is enough to prove key possession and survives rewriting.
 -spec canonical_identity(map()) -> binary().
 canonical_identity(M) ->
     Id   = to_bin(maps:get(id, M, <<>>)),
-    Host = to_bin(maps:get(host, M, <<>>)),
-    Port = integer_to_binary(maps:get(port, M, 0)),
-    QP   = integer_to_binary(qp(maps:get(query_port, M, 0))),
     Name = to_bin(maps:get(name, M, <<>>)),
-    iolist_to_binary([Id, 0, Host, 0, Port, 0, QP, 0, Name]).
+    iolist_to_binary([Id, 0, Name]).
 
 -spec verify_selfsig(map()) -> boolean().
 verify_selfsig(#{pubkey := Pub, sig := Sig} = M) when is_binary(Pub), is_binary(Sig) ->
