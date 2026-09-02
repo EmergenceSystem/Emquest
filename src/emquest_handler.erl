@@ -384,12 +384,9 @@ fetch_url_render(Url) ->
 
 fetch_image(Url) ->
     _ = application:ensure_all_started(ssl),
-    Req = {binary_to_list(Url), [{"User-Agent", "velora/1.0"}, {"accept", "image/*"}]},
-    case httpc:request(get, Req, [{timeout, 30000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
-        {ok, {{_, C, _}, _, _}}       -> {error, {fetch_http, C}};
-        {error, R}                    -> {error, R}
-    end.
+    emquest_safeurl:safe_get(Url,
+        [{"User-Agent", "velora/1.0"}, {"accept", "image/*"}],
+        [{timeout, 30000}]).
 
 url_filename(Url) ->
     Path = case binary:split(Url, <<"?">>) of [P | _] -> P; _ -> Url end,
@@ -930,16 +927,11 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
 -spec fetch_preview(binary()) -> {ok, binary()} | {error, term()}.
 fetch_preview(<<>>) -> {error, empty_url};
 fetch_preview(Url) ->
-    UrlStr = binary_to_list(Url),
-    case httpc:request(get, {UrlStr, [{"User-Agent",
-                "Mozilla/5.0 (compatible; Emquest/1.0)"}]},
-                       [{timeout, 5000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _Headers, Body}} ->
-            {ok, best_description(Body)};
-        {ok, {{_, Code, _}, _, _}} ->
-            {error, {http, Code}};
-        {error, R} ->
-            {error, R}
+    case emquest_safeurl:safe_get(Url,
+             [{"User-Agent", "Mozilla/5.0 (compatible; Emquest/1.0)"}],
+             [{timeout, 5000}]) of
+        {ok, Body} -> {ok, best_description(Body)};
+        {error, R} -> {error, R}
     end.
 
 %% @private

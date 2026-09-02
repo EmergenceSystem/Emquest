@@ -24,3 +24,11 @@ private_ipv6_blocked_test() ->
     ?assertEqual(true,  emquest_safeurl:is_blocked_ip({16#fe80,0,0,0,0,0,0,1})),
     ?assertEqual(true,  emquest_safeurl:is_blocked_ip({16#fd00,0,0,0,0,0,0,1})),
     ?assertEqual(false, emquest_safeurl:is_blocked_ip({16#2606,16#2800,16#220,1,16#248,16#1893,16#25c8,16#1946})).
+
+guard_rejects_metadata_url_test() ->
+    ?assertMatch({error, blocked_ip},
+                 emquest_safeurl:safe_get(<<"http://169.254.169.254/latest/meta-data/">>, [], [{timeout, 2000}])).
+
+guard_rejects_localhost_test() ->
+    ?assertMatch({error, blocked_ip},
+                 emquest_safeurl:safe_get(<<"http://127.0.0.1:8300/health">>, [], [{timeout, 2000}])).
