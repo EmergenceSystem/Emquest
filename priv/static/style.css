@@ -577,11 +577,11 @@ a.item-title:hover,
 /* Footer                                                             */
 /* ================================================================== */
 .app-footer {
-    display: none; /* removed per design — keep the element for JS refs */
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
     background: rgba(0, 14, 10, 0.72); border-top: 1px solid var(--glass-brd);
     padding: 0 2rem; height: 36px;
-    display: flex; align-items: center; gap: 0.75rem;
+    display: none; /* removed per design — keep the element for JS refs */
+    align-items: center; gap: 0.75rem;
     font-family: var(--font-mono);
     font-size: 0.68rem; color: var(--muted);
     backdrop-filter: blur(14px) saturate(1.2);

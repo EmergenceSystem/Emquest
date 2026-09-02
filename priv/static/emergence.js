@@ -25,8 +25,21 @@
   rs(); addEventListener('resize',rs);
   const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
   const N=[]; for(let i=0;i<90;i++){const ph=Math.acos(2*Math.random()-1),th=Math.random()*7;N.push([Math.sin(ph)*Math.cos(th),Math.sin(ph)*Math.sin(th),Math.cos(ph)])}
+  /* drag-to-throw: grab the globe from any empty background area, fling it, and
+     it keeps the speed+direction you gave it, decaying back to the gentle auto-spin. */
+  const AUTO=.003; let vel=AUTO, drag=false, lastX=0;
+  if(!reduce){
+    document.addEventListener('pointerdown',e=>{
+      if(e.target.closest('.item-card, input, textarea, button, a, .type-drawer, .search-box, .app-header')) return;
+      drag=true; lastX=e.clientX; vel=0;
+    });
+    document.addEventListener('pointermove',e=>{ if(!drag) return; const dx=e.clientX-lastX; lastX=e.clientX; vel=dx*.0006; t+=vel; });
+    document.addEventListener('pointerup',()=>{ drag=false; });
+    document.addEventListener('pointercancel',()=>{ drag=false; });
+  }
   function frame(){
-    x.clearRect(0,0,w,h); if(!reduce) t+=.003;
+    if(!reduce && !drag){ vel=vel*.94 + AUTO*.06; t+=vel; }
+    x.clearRect(0,0,w,h);
     const cx=w*.8,cy=h*.34,R=Math.min(w,h)*.34;
     const pr=N.map(([a,b,cc])=>{const X=a*Math.cos(t)-cc*Math.sin(t),Z=a*Math.sin(t)+cc*Math.cos(t);return[cx+X*R,cy+b*R,(Z+1)/2]});
     x.lineWidth=1.1;
