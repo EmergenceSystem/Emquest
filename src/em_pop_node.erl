@@ -54,6 +54,7 @@
 -export([get_id/1, get_vector/1, add_peer/3, get_peers/1,
          peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2,
          ban/3, unban/2, is_banned/2, set_trust/3]).
+-export([accept_peer/1, test_peer/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %%====================================================================
@@ -109,7 +110,9 @@
     last_seen              :: integer(),          %% erlang:monotonic_time(millisecond)
     base_path = <<>>       :: binary(),           %% public path prefix (hub-rewritten leaf)
     role = hub             :: leaf | hub,         %% role advertised by this peer
-    fail_count = 0         :: non_neg_integer()   %% consecutive failed direct contacts
+    fail_count = 0         :: non_neg_integer(),  %% consecutive failed direct contacts
+    pubkey = undefined     :: binary() | undefined,  %% optional ed25519 pubkey (open federation)
+    selfsig = undefined    :: binary() | undefined   %% optional self-signature over the identity
 }).
 
 %% gen_server state for the local node.
@@ -579,7 +582,43 @@ upsert_peer(#peer{id = Id}, #state{banned = Banned} = State)
         when is_map_key(Id, Banned) ->
     %% Refuse a banned id outright — no insert, no reindex.
     State;
-upsert_peer(#peer{id = Id} = New,
+upsert_peer(#peer{} = New, State) ->
+    case accept_peer(New) of
+        false -> State;
+        true  -> upsert_peer_ok(New, State)
+    end.
+
+%% @private Decide whether to admit a peer learned from gossip.
+%% Backward-compat: a peer WITHOUT a pubkey is accepted (unverified) as before.
+%% A peer WITH pubkey+selfsig must: (a) pass verify_selfsig, and (b) satisfy
+%% trust-on-first-use — the first pubkey seen for an id is bound persistently;
+%% a later, DIFFERENT pubkey for the same id is rejected (id-takeover attempt).
+-spec accept_peer(#peer{}) -> boolean().
+accept_peer(#peer{pubkey = undefined}) -> true;
+accept_peer(#peer{pubkey = Pub, selfsig = Sig, id = Id, host = H,
+                  port = P, query_port = QP, name = Name})
+        when is_binary(Pub), is_binary(Sig) ->
+    Ident = #{id => Id, host => H, port => P, query_port => QP,
+              name => Name, pubkey => Pub, sig => Sig},
+    case em_pop_crypto:verify_selfsig(Ident) of
+        false -> false;
+        true ->
+            case catch em_pop_store:get_pubkey(Id) of
+                Pub       -> true;                         %% same key re-seen
+                undefined -> catch em_pop_store:put_pubkey(Id, Pub), true;  %% TOFU first bind
+                _Other    -> false                          %% id claimed by a different key
+            end
+    end;
+accept_peer(#peer{pubkey = Pub}) when is_binary(Pub) -> false.  %% pubkey but no/!bin sig
+
+%% @private Test-only constructor for a #peer{} (used by eunit).
+test_peer(Id, Host, Port, QP, Name, PK, Sig) ->
+    #peer{id = Id, host = Host, port = Port, query_port = QP, name = Name,
+          vector = <<0,0,0,0>>, pubkey = PK, selfsig = Sig,
+          last_seen = erlang:monotonic_time(millisecond)}.
+
+-spec upsert_peer_ok(#peer{}, #state{}) -> #state{}.
+upsert_peer_ok(#peer{id = Id} = New,
             #state{peers = Peers, kvex_ix = Ix} = State) ->
     {Trust, NeedsReindex} = case maps:find(Id, Peers) of
         {ok, #peer{trust = T, vector = OldVec}} ->
@@ -735,7 +774,9 @@ merge_peers([P | Rest],
             State;
         false ->
             ExpBytes = byte_size(State#state.vector),
-            case byte_size(P#peer.vector) =:= ExpBytes andalso ExpBytes > 0 of
+            Acceptable = byte_size(P#peer.vector) =:= ExpBytes andalso ExpBytes > 0
+                         andalso accept_peer(P),
+            case Acceptable of
                 false -> merge_peers(Rest, State);
                 true ->
                     kvex:add(Ix, P#peer.id, P#peer.vector),
@@ -894,14 +935,17 @@ state_to_payload(#state{id = Id, host = Host, port = Port,
 %% Serialise one #peer{} record for embedding in a payload.
 -spec peer_to_payload(#peer{}) -> map().
 peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
-                      name = Name, vector = V, trust = T}) ->
+                      name = Name, vector = V, trust = T,
+                      pubkey = PK, selfsig = Sig}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => H,
       <<"port">>       => P,
       <<"query_port">> => case QP of undefined -> null; Q -> Q end,
       <<"name">>       => Name,
       <<"vector">>     => base64:encode(V),
-      <<"trust">>      => T}.
+      <<"trust">>      => T,
+      <<"pubkey">>     => case PK  of undefined -> null; _ -> base64:encode(PK)  end,
+      <<"sig">>        => case Sig of undefined -> null; _ -> base64:encode(Sig) end}.
 
 %% Deserialise the remote node's description from a gossip payload.
 -spec payload_to_peer(map()) -> #peer{}.
@@ -926,9 +970,23 @@ payload_to_peer(#{<<"id">>     := Id,
                          <<"leaf">> -> leaf;
                          _          -> hub
                      end,
+        pubkey     = decode_opt(maps:get(<<"pubkey">>, Map, null)),
+        selfsig    = decode_opt(maps:get(<<"sig">>,    Map, null)),
         %% Set last_seen to now — we just heard from this node.
         last_seen  = erlang:monotonic_time(millisecond)
     }.
+
+%% @private Decode an optional base64 field; returns undefined when absent
+%% (JSON null / missing key) or when decoding fails on garbage input.
+-spec decode_opt(binary() | null | undefined) -> binary() | undefined.
+decode_opt(null)      -> undefined;
+decode_opt(undefined) -> undefined;
+decode_opt(B) when is_binary(B) ->
+    case catch base64:decode(B) of
+        D when is_binary(D) -> D;
+        _                   -> undefined
+    end;
+decode_opt(_) -> undefined.
 
 %% Extract the list of peers embedded in a gossip payload.
 -spec payload_to_peers(map()) -> [#peer{}].

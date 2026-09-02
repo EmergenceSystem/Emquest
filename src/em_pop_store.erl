@@ -10,7 +10,8 @@
 %%%-------------------------------------------------------------------
 -module(em_pop_store).
 -export([open/1, close/0, put_trust/3, get_trust/1, all_trust/0,
-         ban/2, unban/1, is_banned/1, all_bans/0]).
+         ban/2, unban/1, is_banned/1, all_bans/0,
+         put_pubkey/2, get_pubkey/1]).
 
 -define(TAB, em_pop_store).
 
@@ -51,3 +52,13 @@ is_banned(Id) -> dets:member(?TAB, {ban, Id}).
 all_bans() ->
     dets:foldl(fun({{ban, Id}, V}, Acc) -> Acc#{Id => V};
                   (_, Acc) -> Acc end, #{}, ?TAB).
+
+-spec put_pubkey(binary(), binary()) -> ok.
+put_pubkey(Id, Pub) -> dets:insert(?TAB, {{pubkey, Id}, Pub}).
+
+-spec get_pubkey(binary()) -> binary() | undefined.
+get_pubkey(Id) ->
+    case dets:lookup(?TAB, {pubkey, Id}) of
+        [{_, Pub}] -> Pub;
+        []         -> undefined
+    end.
