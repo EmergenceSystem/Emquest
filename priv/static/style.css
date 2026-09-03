@@ -354,10 +354,10 @@ body::after {
     backdrop-filter: blur(14px) saturate(1.2);
     transform-style: preserve-3d;
 
-    /* cards are visible by default; cardIn only slides them in (no opacity gate,
-       so a delayed/interrupted entrance animation can never leave them invisible). */
-    transform: translateY(8px);
-    animation: cardIn 0.28s var(--ease) forwards;
+    /* cards are visible by default; cardIn only slides them in. NO `forwards`
+       fill and no base transform, so the entrance animation never permanently
+       holds the transform — that lets the hover 3D tilt (inline transform) win. */
+    animation: cardIn 0.28s var(--ease);
 
     transition:
         border-color 0.2s var(--ease),

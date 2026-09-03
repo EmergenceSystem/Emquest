@@ -173,9 +173,32 @@ function showError(msg) {
     if (footer) footer.textContent = 'peer table unavailable';
 }
 
+/* Read the admin bearer token from the same IndexedDB store the admin console
+   uses, so a signed-in admin sees the mesh here without re-entering it. */
+function idbToken() {
+    return new Promise((resolve) => {
+        try {
+            const req = indexedDB.open('emquest_admin', 1);
+            req.onupgradeneeded = () => { try { req.result.createObjectStore('kv'); } catch (e) {} };
+            req.onsuccess = () => {
+                try {
+                    const tx = req.result.transaction('kv', 'readonly');
+                    const g = tx.objectStore('kv').get('token');
+                    g.onsuccess = () => resolve(g.result || null);
+                    g.onerror = () => resolve(null);
+                } catch (e) { resolve(null); }
+            };
+            req.onerror = () => resolve(null);
+        } catch (e) { resolve(null); }
+    });
+}
+
 async function loadPeers() {
     try {
-        const r = await fetch('/network/peers');
+        const token = await idbToken();
+        const headers = token ? { authorization: 'Bearer ' + token } : {};
+        const r = await fetch('/network/peers', { headers });
+        if (r.status === 401) { showError('Admin token required — sign in at /admin first.'); return; }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const peers = await r.json();
         renderPeers(Array.isArray(peers) ? peers : []);

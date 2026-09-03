@@ -94,23 +94,21 @@ init(Req0, preview) ->
     }, Body, Req0), preview};
 
 init(Req0, network) ->
-    case internal_exposed() of
-        false -> {ok, forbidden(Req0), network};
-        true ->
-            Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
-            {Code, Body, CT} = case file:read_file(Path) of
-                {ok, Bin} -> {200, Bin, <<"text/html">>};
-                {error, R} ->
-                    logger:error("[emquest] network.html read failed: ~p", [R]),
-                    {500, <<"Internal Server Error">>, <<"text/plain">>}
-            end,
-            {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network}
-    end;
+    %% Public shell — the topology DATA (/network/peers) is admin-gated below,
+    %% so the page loads for anyone but only shows peers to a signed-in admin.
+    Path = filename:join([code:priv_dir(emquest), "templates", "network.html"]),
+    {Code, Body, CT} = case file:read_file(Path) of
+        {ok, Bin} -> {200, Bin, <<"text/html">>};
+        {error, R} ->
+            logger:error("[emquest] network.html read failed: ~p", [R]),
+            {500, <<"Internal Server Error">>, <<"text/plain">>}
+    end,
+    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network};
 
 init(Req0, network_peers) ->
-    case internal_exposed() of
-        false -> {ok, forbidden(Req0), network_peers};
-        true ->
+    %% Topology leak surface — require an admin token (same as /admin).
+    case admin_auth(Req0) of
+        {ok, _Name} ->
             Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
             PeerList = [begin
                 H    = maps:get(host,       P, <<"unknown">>),
@@ -125,7 +123,8 @@ init(Req0, network_peers) ->
             {ok, cowboy_req:reply(200, #{
                 <<"content-type">>  => <<"application/json">>,
                 <<"cache-control">> => <<"no-cache">>
-            }, Body, Req0), network_peers}
+            }, Body, Req0), network_peers};
+        _ -> {ok, unauthorized(Req0), network_peers}
     end;
 
 init(Req0, health) ->
