@@ -685,21 +685,29 @@ function applyTypeFilter() {
   if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
 
-// reveal the admin-only nav links (network, admin) when a signed-in admin token
-// exists in IndexedDB. NB: this is cosmetic only — the links are in the DOM
-// regardless; the real protection is server-side (those endpoints require the
-// bearer token and return 401 without it).
+// Admin-only nav links (network, admin) are NOT in the public HTML. When an
+// admin token exists in IndexedDB, fetch the gated /admin/nav fragment (server
+// returns it only to an authenticated admin) and inject it into the header.
+// So the admin surface is never advertised in the static page source. (The
+// real protection is still the token gate on every /admin/* and /network/peers
+// endpoint — this just avoids exposing the links to the public.)
 (function(){
-  const links=['network-link','admin-link'].map(id=>document.getElementById(id)).filter(Boolean);
-  if(!links.length) return;
-  try{
+  const nav=document.querySelector('.sys-status'), clock=document.getElementById('clock');
+  if(!nav) return;
+  function idbToken(){return new Promise(res=>{try{
     const req=indexedDB.open('emquest_admin',1);
     req.onupgradeneeded=()=>{try{req.result.createObjectStore('kv')}catch(e){}};
-    req.onsuccess=()=>{try{
-      const g=req.result.transaction('kv','readonly').objectStore('kv').get('token');
-      g.onsuccess=()=>{ if(g.result) links.forEach(l=>l.hidden=false); };
-    }catch(e){}};
-  }catch(e){}
+    req.onsuccess=()=>{try{const g=req.result.transaction('kv','readonly').objectStore('kv').get('token');
+      g.onsuccess=()=>res(g.result||null); g.onerror=()=>res(null);}catch(e){res(null)}};
+    req.onerror=()=>res(null);
+  }catch(e){res(null)}});}
+  idbToken().then(token=>{ if(!token) return;
+    fetch('/admin/nav',{headers:{authorization:'Bearer '+token}})
+      .then(r=>r.ok?r.text():null)
+      .then(html=>{ if(!html) return; const tmp=document.createElement('div'); tmp.innerHTML=html;
+        Array.from(tmp.children).forEach(el=>nav.insertBefore(el, clock)); })
+      .catch(()=>{});
+  });
 })();
 // media-type drawer open/close
 (function(){

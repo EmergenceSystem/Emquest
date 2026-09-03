@@ -228,6 +228,21 @@ init(Req0, admin_me) ->
         _ -> {ok, unauthorized(Req0), admin_me}
     end;
 
+%% /admin/nav — gated HTML fragment: the admin-only nav links. Returned ONLY to
+%% an authenticated admin, so the public page source never contains them; the JS
+%% injects the result into the header. (The endpoints themselves are the real
+%% gate; this just avoids advertising the admin surface in the static HTML.)
+init(Req0, admin_nav) ->
+    case admin_auth(Req0) of
+        {ok, _Name} ->
+            Frag = <<"<a href=\"/network\" class=\"network-link\">network \x{2197}</a>"
+                     "<a href=\"/admin\" class=\"network-link\">admin \x{2197}</a>">>,
+            {ok, cowboy_req:reply(200,
+                #{<<"content-type">> => <<"text/html; charset=utf-8">>, <<"cache-control">> => <<"no-cache">>},
+                Frag, Req0), admin_nav};
+        _ -> {ok, unauthorized(Req0), admin_nav}
+    end;
+
 %% /admin/peers — gated JSON peer list with trust tier + banned flag.
 init(Req0, admin_peers) ->
     case admin_auth(Req0) of

@@ -78,6 +78,7 @@ init([]) ->
                     {"/stt",            emquest_handler, stt},
                     {"/admin",          emquest_handler, admin_index},
                     {"/admin/me",       emquest_handler, admin_me},
+                    {"/admin/nav",      emquest_handler, admin_nav},
                     {"/admin/peers",    emquest_handler, admin_peers},
                     {"/admin/ban",      emquest_handler, admin_ban},
                     {"/admin/unban",    emquest_handler, admin_unban},
