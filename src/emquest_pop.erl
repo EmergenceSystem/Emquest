@@ -38,6 +38,7 @@
 -export([start_link/0, peers_for_query/2, all_peers/0]).
 -export([ban/2, unban/1, set_trust/2]).
 -export([credit/1, penalize/1]).
+-export([node_opts_for_test/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Maximum number of peers this node maintains.
@@ -130,6 +131,39 @@ credit(PeerId) -> gen_server:cast(?MODULE, {credit, PeerId}).
 penalize(PeerId) -> gen_server:cast(?MODULE, {penalize, PeerId}).
 
 %%====================================================================
+%% Gossip hardening (config-gated opt-in)
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% @doc Opt-in gossip hardening options merged into the em_pop_node
+%% start_link Opts map.
+%%
+%% `root_pubkeys' (and `ban_authority_pubkeys', which defaults to the
+%% same list) are stored in sys.config as base64 binaries but
+%% `em_pop_node' compares them against `#peer.pubkey', which holds
+%% RAW 32-byte ed25519 pubkeys — so they are base64-decoded here.
+%% @end
+%%--------------------------------------------------------------------
+-spec hardening_opts() -> map().
+hardening_opts() ->
+    RootPubkeysB64 = application:get_env(emquest, root_pubkeys, []),
+    BanAuthPubkeysB64 = application:get_env(emquest, ban_authority_pubkeys,
+                                             RootPubkeysB64),
+    #{reject_private_hosts  => true,
+      max_peers_per_source  => application:get_env(emquest, max_peers_per_source, 64),
+      root_pubkeys          => [base64:decode(B) || B <- RootPubkeysB64],
+      ban_authority_pubkeys => [base64:decode(B) || B <- BanAuthPubkeysB64]}.
+
+%%--------------------------------------------------------------------
+%% @doc Test-only accessor exposing the hardening opts without
+%% starting the gen_server.
+%% @end
+%%--------------------------------------------------------------------
+-spec node_opts_for_test() -> map().
+node_opts_for_test() ->
+    hardening_opts().
+
+%%====================================================================
 %% gen_server callbacks
 %%====================================================================
 
@@ -140,13 +174,15 @@ init(Opts) ->
     Seeds = maps:get(seeds, Opts, queen:pop_seeds()),
     StateFile = maps:get(state_file, Opts,
                          filename:join(emquest_data_dir(), "em_pop_store.dets")),
-    NodeOpts = #{port            => Port,
-                 vector          => Vec,
-                 seeds           => Seeds,
-                 max_peers       => ?MAX_PEERS,
-                 gossip_interval => 5_000,
-                 stale_timeout   => 300_000,   %% 5 min: full round with 30 peers at 5s/peer = 150s
-                 state_file      => StateFile},
+    NodeOpts = maps:merge(
+                 #{port            => Port,
+                   vector          => Vec,
+                   seeds           => Seeds,
+                   max_peers       => ?MAX_PEERS,
+                   gossip_interval => 5_000,
+                   stale_timeout   => 300_000,   %% 5 min: full round with 30 peers at 5s/peer = 150s
+                   state_file      => StateFile},
+                 hardening_opts()),
     case em_pop_node:start_link(NodeOpts) of
         {ok, NodePid} ->
             lists:foreach(fun({H, P}) ->
