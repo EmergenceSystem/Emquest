@@ -647,6 +647,7 @@ a.item-title:hover,
         border-left: none; border-top: 1px solid var(--glass-brd);
         border-radius: 18px 18px 0 0; padding: 20px 20px 28px;
     }
+    .type-drawer.open { transform: translateY(0); }
 
     /* Results: single column on narrow screens */
     .items-list { grid-template-columns: 1fr; }
