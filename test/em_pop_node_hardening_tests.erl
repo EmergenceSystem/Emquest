@@ -67,3 +67,40 @@ ban_sign_verify_roundtrip_test() ->
     Sig = em_pop_crypto:sign(Rec, Priv),
     ?assert(em_pop_crypto:verify(Rec, Sig, Pub)),
     ?assertNot(em_pop_crypto:verify(em_pop_crypto:canonical_ban(<<1:128>>, 9), Sig, Pub)).
+
+apply_authority_signed_ban_test() ->
+    {Pub, Priv} = em_pop_crypto:keypair(),
+    S0 = em_pop_node:test_state(#{ban_authority_pubkeys => [Pub]}),
+    S1 = em_pop_node:test_add_peer(S0, <<1:128>>, <<"93.184.216.34">>),
+    Ts = erlang:system_time(second),
+    Sig = em_pop_crypto:sign(em_pop_crypto:canonical_ban(<<1:128>>, Ts), Priv),
+    Ban = #{<<"id">> => base64:encode(<<1:128>>), <<"ts">> => Ts,
+            <<"sig">> => base64:encode(Sig), <<"signer">> => base64:encode(Pub)},
+    S2 = em_pop_node:apply_bans_from([Ban], S1),
+    ?assert(em_pop_node:is_banned_st(S2, <<1:128>>)),
+    ?assertNot(em_pop_node:has_peer(S2, <<1:128>>)).
+
+ignore_forged_ban_test() ->
+    {_Pub, Priv} = em_pop_crypto:keypair(),
+    {Auth, _} = em_pop_crypto:keypair(),
+    S0 = em_pop_node:test_state(#{ban_authority_pubkeys => [Auth]}),
+    S1 = em_pop_node:test_add_peer(S0, <<1:128>>, <<"93.184.216.34">>),
+    Ts = erlang:system_time(second),
+    Sig = em_pop_crypto:sign(em_pop_crypto:canonical_ban(<<1:128>>, Ts), Priv), %% wrong key
+    Ban = #{<<"id">> => base64:encode(<<1:128>>), <<"ts">> => Ts,
+            <<"sig">> => base64:encode(Sig), <<"signer">> => base64:encode(Auth)},
+    S2 = em_pop_node:apply_bans_from([Ban], S1),
+    ?assertNot(em_pop_node:is_banned_st(S2, <<1:128>>)),
+    ?assert(em_pop_node:has_peer(S2, <<1:128>>)).
+
+emit_bans_in_payload_test() ->
+    {Pub, Priv} = em_pop_crypto:keypair(),
+    S0 = em_pop_node:test_state(#{ban_authority_pubkeys => [Pub]}),
+    Ts = erlang:system_time(second),
+    Sig = em_pop_crypto:sign(em_pop_crypto:canonical_ban(<<1:128>>, Ts), Priv),
+    Ban = #{<<"id">> => base64:encode(<<1:128>>), <<"ts">> => Ts,
+            <<"sig">> => base64:encode(Sig), <<"signer">> => base64:encode(Pub)},
+    S2 = em_pop_node:apply_bans_from([Ban], S0),
+    Payload = em_pop_node:state_payload_for_test(S2),
+    Bans = maps:get(<<"bans">>, Payload, []),
+    ?assertEqual(1, length(Bans)).

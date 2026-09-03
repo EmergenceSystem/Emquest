@@ -57,6 +57,7 @@
 -export([credit/2, penalize/2]).
 -export([accept_peer/1, test_peer/7]).
 -export([merge_peers_from/3, test_state/1, test_peer/1, test_vector/1, has_peer/2]).
+-export([apply_bans_from/2, test_add_peer/3, is_banned_st/2, state_payload_for_test/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %%====================================================================
@@ -134,12 +135,12 @@
     quarantine = #{}            :: #{binary() => integer()},          %% dead peer id => expiry (mono ms)
     dead_threshold = 3          :: pos_integer(),                     %% failed contacts before dead
     quarantine_ttl = 60000      :: pos_integer(),                     %% ms a dead peer is refused
-    banned = #{}                :: #{binary() => true},               %% persisted-ban set (by peer id)
+    banned = #{}                :: #{binary() => {integer(), binary(), binary()}}, %% persisted-ban set: id => {Ts, SigB64, SignerB64} (Sig/Signer empty = legacy/local-only, not propagated)
     reject_private_hosts = false :: boolean(),                        %% admission host-guard: reject blocked hosts for gossip-learned peers
     max_peers_per_source = 0    :: non_neg_integer(),                 %% per-source sybil cap on distinct peers admitted via gossip (0 = disabled)
     root_pubkeys = []           :: [binary()],                        %% pubkeys of root-anchored hubs exempt from the host-guard/sybil-cap
     source_counts = #{}         :: #{binary() => non_neg_integer()},  %% per-source count of distinct peers admitted via gossip
-    ban_authority_pubkeys = []  :: [binary()]                         %% pubkeys authorized to issue bans (reserved for future ban-authority verification)
+    ban_authority_pubkeys = []  :: [binary()]                         %% pubkeys authorized to issue bans accepted via gossip (see apply_bans_from/2)
 }).
 
 %%====================================================================
@@ -326,7 +327,7 @@ init(Opts) ->
         StateFile ->
             ok = filelib:ensure_dir(StateFile),
             case em_pop_store:open(StateFile) of
-                {ok, _} -> maps:map(fun(_, _) -> true end, em_pop_store:all_bans());
+                {ok, _} -> maps:map(fun(_, _) -> {0, <<>>, <<>>} end, em_pop_store:all_bans());
                 {error, R} ->
                     ?LOG_WARNING("[em_pop] store open failed ~p: ~p", [StateFile, R]),
                     #{}
@@ -384,8 +385,9 @@ handle_call({add_peer, Host, Port}, _From, State) ->
             RemotePeers = payload_to_peers(RemotePayload),
             State1 = upsert_peer(Remote, State),
             State2 = merge_peers(RemotePeers, Remote, State1),
+            State3 = apply_bans_from(maps:get(<<"bans">>, RemotePayload, []), State2),
             ?LOG_DEBUG("em_pop add_peer ok ~s:~w", [Host, Port]),
-            {reply, ok, State2};
+            {reply, ok, State3};
         {error, Reason} ->
             ?LOG_WARNING("em_pop add_peer failed ~s:~w reason=~p",
                          [Host, Port, Reason]),
@@ -431,7 +433,20 @@ handle_call({get_trust, PeerId}, _From, #state{peers = Peers} = State) ->
 %%--------------------------------------------------------------------
 handle_call({ban, PeerId, Reason}, _From, #state{peers = Peers, banned = B} = State) ->
     catch em_pop_store:ban(PeerId, Reason),
-    {reply, ok, State#state{peers = maps:remove(PeerId, Peers), banned = B#{PeerId => true}}};
+    Ts = erlang:system_time(second),
+    {SigB64, SignerB64} =
+        case {application:get_env(emquest, em_pop_privkey, undefined),
+              application:get_env(emquest, em_pop_pubkey, undefined)} of
+            {Priv, Pub} when is_binary(Priv), is_binary(Pub) ->
+                Sig = em_pop_crypto:sign(em_pop_crypto:canonical_ban(PeerId, Ts), Priv),
+                {base64:encode(Sig), base64:encode(Pub)};
+            _ ->
+                %% No node signing key configured -- ban stays local-only
+                %% (enforced here, but not propagated via gossip).
+                {<<>>, <<>>}
+        end,
+    {reply, ok, State#state{peers = maps:remove(PeerId, Peers),
+                             banned = B#{PeerId => {Ts, SigB64, SignerB64}}}};
 
 handle_call({unban, PeerId}, _From, #state{banned = B} = State) ->
     catch em_pop_store:unban(PeerId),
@@ -470,7 +485,8 @@ handle_call(gossip_tick, _From, State) ->
             Remote      = payload_to_peer(RemotePayload),
             RemotePeers = payload_to_peers(RemotePayload),
             State1 = upsert_peer(Remote, State),
-            merge_peers(RemotePeers, Remote, State1);
+            State2 = merge_peers(RemotePeers, Remote, State1),
+            apply_bans_from(maps:get(<<"bans">>, RemotePayload, []), State2);
         {error, Reason} ->
             ?LOG_DEBUG("em_pop gossip_tick failed peer=~s reason=~p",
                        [short_id(PeerId), Reason]),
@@ -494,7 +510,8 @@ handle_call({handle_gossip, InPayload}, _From, State) ->
     RemotePeers = payload_to_peers(InPayload),
     State1 = upsert_peer(Remote, State),
     State2 = merge_peers(RemotePeers, Remote, State1),
-    {reply, {ok, state_to_payload(State2)}, State2};
+    State3 = apply_bans_from(maps:get(<<"bans">>, InPayload, []), State2),
+    {reply, {ok, state_to_payload(State3)}, State3};
 
 handle_call(_Msg, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -566,7 +583,8 @@ handle_info({gossip_result, _PeerId, {ok, RemotePayload}}, State) ->
     RemotePeers = payload_to_peers(RemotePayload),
     State1 = upsert_peer(Remote, State),
     State2 = merge_peers(RemotePeers, Remote, State1),
-    {noreply, State2};
+    State3 = apply_bans_from(maps:get(<<"bans">>, RemotePayload, []), State2),
+    {noreply, State3};
 
 %% Async gossip result — failed exchange: penalise trust, keep going.
 handle_info({gossip_result, PeerId, {error, Reason}}, State) ->
@@ -1028,7 +1046,7 @@ http_post(Url, Payload) ->
 -spec state_to_payload(#state{}) -> map().
 state_to_payload(#state{id = Id, host = Host, port = Port,
                          query_port = QPort, name = Name,
-                         vector = Vec, peers = Peers}) ->
+                         vector = Vec, peers = Peers, banned = Banned}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => Host,
       <<"port">>       => Port,
@@ -1036,7 +1054,13 @@ state_to_payload(#state{id = Id, host = Host, port = Port,
       <<"name">>       => Name,
       <<"vector">>     => base64:encode(Vec),
       %% Include our own peer list so the remote can discover them too.
-      <<"peers">>      => [peer_to_payload(P) || P <- maps:values(Peers)]}.
+      <<"peers">>      => [peer_to_payload(P) || P <- maps:values(Peers)],
+      %% Re-emit only authority-signed bans (Sig non-empty); legacy/local-only
+      %% bans (unsigned) are enforced here but never propagated via gossip.
+      <<"bans">>       => [#{<<"id">> => base64:encode(BId), <<"ts">> => Ts,
+                              <<"sig">> => Sig, <<"signer">> => Signer}
+                            || {BId, {Ts, Sig, Signer}} <- maps:to_list(Banned),
+                               Sig =/= <<>>]}.
 
 %% Serialise one #peer{} record for embedding in a payload.
 -spec peer_to_payload(#peer{}) -> map().
@@ -1101,6 +1125,61 @@ payload_to_peers(#{<<"peers">> := List}) ->
 payload_to_peers(_) ->
     %% Defensive: ignore missing peers list rather than crashing.
     [].
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Apply a list of authority-signed ban records (from a gossip
+%% payload's `bans' field) to State.
+%%
+%% A ban is accepted only when its `signer' is a member of
+%% `ban_authority_pubkeys' AND the signature verifies over
+%% `canonical_ban(Id, Ts)'. Accepted bans evict the peer, persist to
+%% em_pop_store, and are kept in `banned' so they can be re-emitted.
+%% When a ban for the same id already exists, only a newer (or equal)
+%% Ts replaces it. Malformed or unverifiable entries are ignored.
+%% @end
+%%--------------------------------------------------------------------
+-spec apply_bans_from([map()], #state{}) -> #state{}.
+apply_bans_from(Bans, State) when is_list(Bans) ->
+    lists:foldl(fun apply_one_ban/2, State, Bans);
+apply_bans_from(_NotAList, State) ->
+    State.
+
+-spec apply_one_ban(map(), #state{}) -> #state{}.
+apply_one_ban(#{<<"id">> := IdB64, <<"ts">> := Ts, <<"sig">> := SigB64,
+                <<"signer">> := SignerB64} = Ban,
+              #state{ban_authority_pubkeys = AuthKeys, banned = Banned,
+                     peers = Peers} = State)
+        when is_integer(Ts) ->
+    case catch {base64:decode(IdB64), base64:decode(SigB64), base64:decode(SignerB64)} of
+        {'EXIT', _} ->
+            State;
+        {_, _, _} = Decoded ->
+            apply_one_ban_decoded(Decoded, Ts, Ban, AuthKeys, Banned, Peers, State)
+    end;
+apply_one_ban(_BadShape, State) ->
+    State.
+
+apply_one_ban_decoded({Id, Sig, Signer}, Ts, #{<<"sig">> := SigB64, <<"signer">> := SignerB64},
+                       AuthKeys, Banned, Peers, State) ->
+    case lists:member(Signer, AuthKeys) andalso
+         em_pop_crypto:verify(em_pop_crypto:canonical_ban(Id, Ts), Sig, Signer) of
+        false ->
+            State;
+        true ->
+            Keep = case maps:find(Id, Banned) of
+                {ok, {OldTs, _, _}} -> Ts >= OldTs;
+                error               -> true
+            end,
+            case Keep of
+                false -> State;
+                true ->
+                    catch em_pop_store:ban(Id, <<"gossip">>),
+                    State#state{
+                        banned = maps:put(Id, {Ts, SigB64, SignerB64}, Banned),
+                        peers  = maps:remove(Id, Peers)}
+            end
+    end.
 
 %% Convert a #peer{} record to a plain map for the public API.
 -spec peer_to_map(#peer{}) -> map().
@@ -1213,4 +1292,21 @@ has_peer(#state{peers = P}, Id) -> maps:is_key(Id, P).
 %% @doc Test-only entry point exposing merge_peers/3 to eunit.
 -spec merge_peers_from([#peer{}], #peer{} | undefined, #state{}) -> #state{}.
 merge_peers_from(Peers, Src, State) -> merge_peers(Peers, Src, State).
+
+%% @doc Test-only helper: directly insert a peer with the given Id/Host
+%% (and a vector matching State's own dimension) into State's peer map,
+%% bypassing admission checks -- for tests that need a guaranteed peer
+%% present before exercising ban logic.
+-spec test_add_peer(#state{}, binary(), binary()) -> #state{}.
+test_add_peer(#state{peers = Peers} = State, Id, Host) ->
+    P = test_peer(#{id => Id, host => Host, vector => test_vector(State)}),
+    State#state{peers = Peers#{Id => P}}.
+
+%% @doc Test-only helper: true when Id is present in State's banned map.
+-spec is_banned_st(#state{}, binary()) -> boolean().
+is_banned_st(#state{banned = B}, Id) -> maps:is_key(Id, B).
+
+%% @doc Test-only entry point exposing state_to_payload/1 to eunit.
+-spec state_payload_for_test(#state{}) -> map().
+state_payload_for_test(State) -> state_to_payload(State).
 
