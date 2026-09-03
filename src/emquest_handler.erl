@@ -47,7 +47,7 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
+-export([init/2, fetch_from_agent/2, fetch_from_disco/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, internal_exposed/0,
          client_ip/1, response_ok/2]).
 -export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
@@ -901,15 +901,12 @@ trim_incomplete_utf8(B) ->
 -spec fetch_from_disco(binary(), string()) ->
     {ok, map()} | {error, term()}.
 fetch_from_disco(Body, Url) ->
-    case httpc:request(post,
-                       {Url, [], "application/json",
-                        binary_to_list(Body)},
-                       [{timeout, 10000}], []) of
-        {ok, {{_, 200, _}, _, RespBody}} ->
+    case emquest_safeurl:safe_post(list_to_binary(Url), [], "application/json",
+                                   Body, [{timeout, 10000}]) of
+        {ok, RespBody} ->
             try {ok, json:decode(iolist_to_binary(RespBody))}
             catch _:_ -> {error, invalid_json} end;
-        {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
-        {error, R}                 -> {error, R}
+        {error, R} -> {error, R}
     end.
 
 %%--------------------------------------------------------------------
@@ -936,11 +933,9 @@ em_auth_headers() ->
     end.
 
 fetch_from_agent(Body, Url) ->
-    case httpc:request(post,
-                       {Url, em_auth_headers(), "application/json",
-                        binary_to_list(Body)},
-                       [{timeout, 8000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, RespBody}} ->
+    case emquest_safeurl:safe_post(list_to_binary(Url), em_auth_headers(),
+                                   "application/json", Body, [{timeout, 8000}]) of
+        {ok, RespBody} ->
             try
                 #{<<"results">> := Items0} = RespMap = json:decode(RespBody),
                 Items = case is_list(Items0) of
@@ -952,8 +947,7 @@ fetch_from_agent(Body, Url) ->
                     false -> {error, bad_signature}
                 end
             catch _:_ -> {error, invalid_response} end;
-        {ok, {{_, Code, _}, _, _}} -> {error, {http, Code}};
-        {error, R}                 -> {error, R}
+        {error, R} -> {error, R}
     end.
 
 %% @doc Whether an unsigned filter response is rejected. Default false

@@ -9,7 +9,7 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_safeurl).
--export([check/1, check_scheme/1, is_blocked_ip/1, safe_get/3]).
+-export([check/1, check/2, check_scheme/1, is_blocked_ip/1, safe_get/3, safe_post/5]).
 
 -define(ALLOWED_SCHEMES, [<<"http">>, <<"https">>]).
 
@@ -21,6 +21,25 @@ check(Url) when is_binary(Url) ->
             case host_of(Url) of
                 {ok, Host} -> check_host_addrs(Host);
                 Err        -> Err
+            end;
+        Err -> Err
+    end.
+
+%% @doc Like check/1 but exempts an explicit allow-list of hosts (lowercased
+%% binaries) from the resolved-IP block. Used for the co-located trusted mesh
+%% (e.g. <<\"localhost\">>, <<\"127.0.0.1\">>) whose peers legitimately
+%% advertise loopback addresses. The scheme allow-list is NEVER bypassed.
+-spec check(binary(), [binary()]) -> ok | {error, term()}.
+check(Url, ExemptHosts) when is_binary(Url) ->
+    case check_scheme(Url) of
+        ok ->
+            case host_of(Url) of
+                {ok, Host} ->
+                    case lists:member(string:lowercase(Host), ExemptHosts) of
+                        true  -> ok;
+                        false -> check_host_addrs(Host)
+                    end;
+                Err -> Err
             end;
         Err -> Err
     end.
@@ -87,7 +106,30 @@ safe_get(Url, Headers, HttpOpts) ->
     case check(Url) of
         ok ->
             case httpc:request(get, {binary_to_list(Url), Headers},
-                               HttpOpts, [{body_format, binary}, {autoredirect, false}]) of
+                               [{autoredirect, false} | HttpOpts],
+                               [{body_format, binary}]) of
+                {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
+                {ok, {{_, C,   _}, _, _}}     -> {error, {http, C}};
+                {error, R}                    -> {error, R}
+            end;
+        Err -> Err
+    end.
+
+%% @doc SSRF-checked POST. Same shape as the httpc POST calls it replaces:
+%% pre-flights the URL through check/1 (scheme + resolved-IP block) so a
+%% peer-advertised target can never reach a private/loopback/metadata host,
+%% and disables redirect-following (a 30x could otherwise bounce internal).
+-spec safe_post(binary(), [{string(), string()}], string(), iodata(), [term()]) ->
+    {ok, binary()} | {error, term()}.
+safe_post(Url, Headers, ContentType, Body, HttpOpts) ->
+    Exempt = application:get_env(emquest, fetch_guard_exempt_hosts,
+                                 [<<"localhost">>, <<"127.0.0.1">>, <<"::1">>]),
+    case check(Url, Exempt) of
+        ok ->
+            case httpc:request(post,
+                               {binary_to_list(Url), Headers, ContentType, Body},
+                               [{autoredirect, false} | HttpOpts],
+                               [{body_format, binary}]) of
                 {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
                 {ok, {{_, C,   _}, _, _}}     -> {error, {http, C}};
                 {error, R}                    -> {error, R}

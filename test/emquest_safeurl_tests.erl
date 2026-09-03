@@ -50,3 +50,45 @@ extra_ipv4_ranges_blocked_test() ->
     ?assertEqual(true, emquest_safeurl:is_blocked_ip({0,1,2,3})),      %% 0.0.0.0/8
     ?assertEqual(true, emquest_safeurl:is_blocked_ip({100,64,0,1})),   %% CGNAT 100.64/10
     ?assertEqual(true, emquest_safeurl:is_blocked_ip({100,127,255,1})).
+
+%% --- safe_post SSRF guard (open-federation: peer-advertised POST targets) ---
+%% Exempt hosts (localhost family) stay reachable so the co-located local
+%% mesh keeps working; every other private/loopback/metadata target is blocked.
+
+safe_post_blocks_metadata_test() ->
+    ?assertMatch({error, blocked_ip},
+                 emquest_safeurl:safe_post(<<"http://169.254.169.254/latest/meta-data/">>,
+                                           [], "application/json", <<"{}">>,
+                                           [{timeout, 2000}])).
+
+safe_post_blocks_rfc1918_test() ->
+    ?assertMatch({error, blocked_ip},
+                 emquest_safeurl:safe_post(<<"http://10.0.0.5:9201/agent/query">>,
+                                           [], "application/json", <<"{}">>,
+                                           [{timeout, 2000}])).
+
+safe_post_blocks_bad_scheme_test() ->
+    ?assertMatch({error, bad_scheme},
+                 emquest_safeurl:safe_post(<<"file:///etc/passwd">>,
+                                           [], "application/json", <<"{}">>,
+                                           [{timeout, 2000}])).
+
+%% localhost is exempt: the guard must NOT return blocked_ip; the request
+%% proceeds and fails at connect time instead (no listener on port 9).
+safe_post_allows_exempt_localhost_test() ->
+    inets:start(),
+    R = emquest_safeurl:safe_post(<<"http://127.0.0.1:9/agent/query">>,
+                                  [], "application/json", <<"{}">>,
+                                  [{timeout, 1000}]),
+    ?assertNotMatch({error, blocked_ip}, R),
+    ?assertNotMatch({error, bad_scheme}, R).
+
+%% check/2 lets callers pass an explicit exempt-host allow-list.
+check2_exempts_listed_host_test() ->
+    ?assertEqual(ok, emquest_safeurl:check(<<"http://127.0.0.1:9/x">>,
+                                           [<<"127.0.0.1">>])),
+    ?assertMatch({error, blocked_ip},
+                 emquest_safeurl:check(<<"http://10.0.0.1/x">>, [<<"127.0.0.1">>])),
+    %% exemption never bypasses the scheme allow-list
+    ?assertMatch({error, bad_scheme},
+                 emquest_safeurl:check(<<"file:///x">>, [<<"127.0.0.1">>])).

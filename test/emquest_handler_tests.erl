@@ -123,3 +123,25 @@ response_ok_unsigned_rejected_when_required_test() ->
     application:set_env(emquest, require_signatures, true),
     ?assertNot(emquest_handler:response_ok(#{<<"results">> => []}, [])),
     application:unset_env(emquest, require_signatures).
+
+%% --- peer-advertised POST targets must be SSRF-guarded (open federation) ---
+%% A gossiped peer advertising a non-exempt private/metadata host must be
+%% refused before any request leaves the node.
+
+fetch_from_agent_blocks_metadata_target_test() ->
+    inets:start(),
+    ?assertMatch({error, blocked_ip},
+                 emquest_handler:fetch_from_agent(<<"{}">>,
+                     "http://169.254.169.254:80/agent/query")).
+
+fetch_from_agent_blocks_rfc1918_target_test() ->
+    inets:start(),
+    ?assertMatch({error, blocked_ip},
+                 emquest_handler:fetch_from_agent(<<"{}">>,
+                     "http://10.0.0.5:9201/agent/query")).
+
+fetch_from_disco_blocks_metadata_target_test() ->
+    inets:start(),
+    ?assertMatch({error, blocked_ip},
+                 emquest_handler:fetch_from_disco(<<"{}">>,
+                     "http://169.254.169.254:80/query")).
