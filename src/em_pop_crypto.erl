@@ -9,7 +9,8 @@
 %%%-------------------------------------------------------------------
 -module(em_pop_crypto).
 -export([keypair/0, id_of/1, sign/2, verify/3,
-         canonical_identity/1, verify_selfsig/1, canonical_response/1]).
+         canonical_identity/1, verify_selfsig/1, canonical_response/1,
+         canonical_ban/2]).
 
 -spec keypair() -> {binary(), binary()}.
 keypair() ->
@@ -76,3 +77,10 @@ pick(M, [K|Ks]) ->
         V when is_binary(V) -> V;
         _ -> pick(M, Ks)
     end.
+
+%% @doc Deterministic bytes for a ban record. MUST stay byte-identical across
+%% both repos (em_filter_src and Emquest) so a signature made by one verifies
+%% in the other.
+-spec canonical_ban(binary(), integer()) -> binary().
+canonical_ban(BannedId, Ts) when is_binary(BannedId), is_integer(Ts) ->
+    iolist_to_binary([BannedId, 0, integer_to_binary(Ts)]).
