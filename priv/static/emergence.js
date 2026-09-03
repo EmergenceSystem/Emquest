@@ -685,15 +685,19 @@ function applyTypeFilter() {
   if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
 
-// reveal the "network" nav link only to a signed-in admin (token in IndexedDB)
+// reveal the admin-only nav links (network, admin) when a signed-in admin token
+// exists in IndexedDB. NB: this is cosmetic only — the links are in the DOM
+// regardless; the real protection is server-side (those endpoints require the
+// bearer token and return 401 without it).
 (function(){
-  const link=document.getElementById('network-link'); if(!link) return;
+  const links=['network-link','admin-link'].map(id=>document.getElementById(id)).filter(Boolean);
+  if(!links.length) return;
   try{
     const req=indexedDB.open('emquest_admin',1);
     req.onupgradeneeded=()=>{try{req.result.createObjectStore('kv')}catch(e){}};
     req.onsuccess=()=>{try{
       const g=req.result.transaction('kv','readonly').objectStore('kv').get('token');
-      g.onsuccess=()=>{ if(g.result) link.hidden=false; };
+      g.onsuccess=()=>{ if(g.result) links.forEach(l=>l.hidden=false); };
     }catch(e){}};
   }catch(e){}
 })();
