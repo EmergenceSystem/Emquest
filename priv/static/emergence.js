@@ -724,7 +724,7 @@ function applyTypeFilter() {
   const list=document.getElementById('results'); if(!list) return;
   list.addEventListener('mousemove',e=>{const c=e.target.closest('.item-card'); if(!c)return;
     const r=c.getBoundingClientRect(),px=(e.clientX-r.left)/r.width-.5,py=(e.clientY-r.top)/r.height-.5;
-    c.style.transform=`rotateY(${px*8}deg) rotateX(${-py*8}deg) translateZ(12px)`});
+    c.style.transform=`rotateY(${px*3.5}deg) rotateX(${-py*3.5}deg) translateZ(4px)`});
   list.addEventListener('mouseout',e=>{const c=e.target.closest('.item-card'); if(c)c.style.transform=''});
 })();
 
@@ -757,7 +757,9 @@ function closeLightbox() {
 
 function openLightbox(src) {
     const body = ensureLightbox();
-    body.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">';
+    body.innerHTML = '<img class="lightbox-img" referrerpolicy="no-referrer" alt="">' +
+                     '<div class="doc-bar"><a class="doc-open" href="' + escAttr(src) +
+                     '" target="_blank" rel="noopener">Open original ↗</a></div>';
     body.querySelector('img').src = src;
     _lightbox.classList.add('open');
 }
