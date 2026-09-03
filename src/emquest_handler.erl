@@ -235,8 +235,9 @@ init(Req0, admin_me) ->
 init(Req0, admin_nav) ->
     case admin_auth(Req0) of
         {ok, _Name} ->
-            Frag = <<"<a href=\"/network\" class=\"network-link\">network \x{2197}</a>"
-                     "<a href=\"/admin\" class=\"network-link\">admin \x{2197}</a>">>,
+            Frag = unicode:characters_to_binary(
+                     "<a href=\"/network\" class=\"network-link\">network \x{2197}</a>"
+                     "<a href=\"/admin\" class=\"network-link\">admin \x{2197}</a>"),
             {ok, cowboy_req:reply(200,
                 #{<<"content-type">> => <<"text/html; charset=utf-8">>, <<"cache-control">> => <<"no-cache">>},
                 Frag, Req0), admin_nav};
