@@ -9,7 +9,7 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_safeurl).
--export([check/1, check/2, check_scheme/1, is_blocked_ip/1, safe_get/3, safe_post/5]).
+-export([check/1, check/2, check_scheme/1, is_blocked_ip/1, host_blocked/1, safe_get/3, safe_post/5]).
 
 -define(ALLOWED_SCHEMES, [<<"http">>, <<"https">>]).
 
@@ -73,6 +73,20 @@ check_host_addrs(Host) ->
                 false -> ok
             end
     end.
+
+%% @doc True when Host is unresolvable or resolves to any blocked
+%% (private/loopback/link-local/metadata) address — fails closed, so a
+%% host this node cannot resolve is treated as blocked rather than
+%% admitted. Used by em_pop_node's gossip admission host-guard to
+%% classify a gossip-learned peer's advertised host.
+-spec host_blocked(binary()) -> boolean().
+host_blocked(Host) when is_binary(Host) ->
+    case check_host_addrs(Host) of
+        ok         -> false;
+        {error, _} -> true
+    end;
+host_blocked(_) ->
+    true.
 
 %% @doc True for loopback / private / link-local / unique-local addresses.
 %% IPv4
