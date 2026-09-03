@@ -286,18 +286,23 @@ body::after {
 /* ================================================================== */
 .empty-state {
     display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 1.75rem; padding: 3.5rem 0 5rem; opacity: 0.55;
+    justify-content: center; gap: 1.1rem; padding: 4rem 1.25rem 5rem;
+    text-align: center; max-width: 640px; margin: 0 auto;
 }
-.empty-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 1px; border: 1px solid var(--glass-brd); border-radius: 10px; overflow: hidden;
-    background: var(--glass); backdrop-filter: blur(10px);
+.welcome-title {
+    font-family: var(--font-mono); font-weight: 500;
+    font-size: clamp(1.6rem, 4.5vw, 2.5rem); letter-spacing: -0.01em;
+    color: #f2fffa; text-shadow: 0 0 30px rgba(0, 255, 160, 0.25);
 }
-.empty-cell {
-    padding: 0.9rem 1.5rem; font-size: 0.78rem; letter-spacing: 0.08em;
-    color: var(--muted); border: 1px solid var(--glass-brd); text-align: center;
+.welcome-text {
+    font-family: var(--font-sans); font-size: 0.95rem; line-height: 1.7;
+    color: var(--muted); max-width: 48ch;
 }
-.empty-hint { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.08em; }
+.welcome-text strong, .welcome-title .c { color: var(--neon); }
+.empty-hint {
+    font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted);
+    letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.7; margin-top: 0.5rem;
+}
 
 /* ================================================================== */
 /* Progress log                                                       */
@@ -616,18 +621,32 @@ a.item-title:hover,
 @media (max-width: 640px) {
     :root { --header-h: 110px; }
 
+    /* Stack: logo, then the search box + media-type pill, then the links/clock
+       BELOW the pill (drift, network/admin, clock never sit beside the search). */
     .header-inner {
-        grid-template-columns: 1fr auto;
-        grid-template-rows: auto auto;
-        gap: 0.75rem; padding: 0.75rem 0;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        gap: 0.6rem; padding: 0.6rem 0;
     }
-    .logo { grid-column: 1; }
-    .sys-status { grid-column: 2; grid-row: 1; }
-    .search-zone { grid-column: 1 / -1; grid-row: 2; }
+    .logo { grid-column: 1; grid-row: 1; }
+    .search-zone { grid-column: 1; grid-row: 2; }
+    .sys-status { grid-column: 1; grid-row: 3; justify-content: flex-start; gap: 1.1rem; }
     .main { padding: 1.5rem 1rem 5rem; }
-    .app-header { padding: 0 1rem; height: auto; }
+    .app-header { padding: 0.55rem 1rem; min-height: auto; }
 
-    .type-drawer { width: 90vw; padding: 22px 18px; }
+    /* Keep the +/mic/send buttons inside the box — let the input shrink. */
+    .search-box { gap: 0.3rem; }
+    .query-input { min-width: 0; }
+    .add-btn, .mic-btn, .send-btn { flex: 0 0 auto; }
+
+    /* Media-type panel becomes a bottom sheet on mobile. */
+    .type-drawer {
+        top: auto; bottom: 0; left: 0; right: 0;
+        width: 100%; height: auto; max-height: 72vh;
+        transform: translateY(100%);
+        border-left: none; border-top: 1px solid var(--glass-brd);
+        border-radius: 18px 18px 0 0; padding: 20px 20px 28px;
+    }
 
     /* Results: single column on narrow screens */
     .items-list { grid-template-columns: 1fr; }

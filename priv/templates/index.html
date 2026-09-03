@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=32">
+    <link rel="stylesheet" href="/static/style.css?v=33">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -36,7 +36,7 @@
                     <textarea
                         id="query-input"
                         class="query-input"
-                        placeholder="Ask anything — search, DNS, knowledge..."
+                        placeholder="Search the distributed mesh…"
                         rows="1"
                         autocomplete="off"
                         spellcheck="false"
@@ -84,12 +84,8 @@
 
         <!-- Empty state -->
         <div class="empty-state" id="empty-state">
-            <div class="empty-grid">
-                <div class="empty-cell">web search</div>
-                <div class="empty-cell">DNS lookup</div>
-                <div class="empty-cell">knowledge</div>
-                <div class="empty-cell">synthesis</div>
-            </div>
+            <h1 class="welcome-title">Distributed discovery.</h1>
+            <p class="welcome-text">Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
             <p class="empty-hint">All agents stand by.</p>
         </div>
 
