@@ -134,7 +134,7 @@ function showGreeting(name) {
     const greeting = document.getElementById('greeting');
     const logout   = document.getElementById('logout');
     if (loginRow) loginRow.hidden = true;
-    if (greeting) { greeting.hidden = false; greeting.textContent = 'Connecté : ' + name; }
+    if (greeting) { greeting.hidden = false; greeting.textContent = 'Signed in: ' + name; }
     if (logout) logout.hidden = false;
 }
 
@@ -243,7 +243,7 @@ async function submitToken() {
     setStatus('checking…');
     const name = await fetchMe(token);
     if (!name) {
-        setStatus('token invalide', 'err');
+        setStatus('invalid token', 'err');
         return;
     }
     currentToken = token;

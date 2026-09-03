@@ -64,12 +64,6 @@ security_headers_present_test() ->
     ?assertEqual(<<"nosniff">>, maps:get(<<"x-content-type-options">>, H)),
     ?assertEqual(<<"DENY">>,    maps:get(<<"x-frame-options">>, H)).
 
-security_headers_app_has_unsafe_hashes_test() ->
-    CSP = maps:get(<<"content-security-policy">>,
-                   emquest_handler:security_headers(<<"text/html">>, emquest_handler:app_script_extra())),
-    ?assertNotEqual(nomatch, binary:match(CSP, <<"'unsafe-hashes'">>)),
-    ?assertNotEqual(nomatch, binary:match(CSP, <<"sha256-">>)).
-
 internal_gate_default_off_test() ->
     application:unset_env(emquest, expose_internal),
     ?assertEqual(false, emquest_handler:internal_exposed()).

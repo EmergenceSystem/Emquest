@@ -4,44 +4,88 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emquest &middot; Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        [hidden] { display: none !important; }
 
         :root {
-            --bg:        #0f1115;
-            --surface:   #161a22;
-            --border:    #232733;
-            --green:     #3ddc84;
+            /* ── Terminal Glass design tokens ─────────────────────── */
+            --bg:        #04060a;
+            --neon:      #00ffa2;
+            --text:      #daffee;
+            --muted:     #6fbf9e;
+            --glass:     rgba(0, 28, 20, 0.42);
+            --glass-brd: rgba(0, 255, 160, 0.22);
+
+            /* ── Legacy aliases used throughout this page's rules ──── */
+            --surface:   var(--glass);
+            --border:    var(--glass-brd);
+            --border-hi: rgba(0, 255, 160, 0.5);
+            --green:     var(--neon);
+            --green-glow:rgba(0, 255, 160, 0.18);
             --amber:     #f5a623;
-            --red:       #e5484d;
-            --muted:     #8b93a7;
-            --text:      #e6e6e6;
-            --font:      ui-monospace, 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+            --red:       #f54b4b;
+            --font:      'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+            --ease:      cubic-bezier(0.4, 0, 0.2, 1);
         }
+
+        html { -webkit-font-smoothing: antialiased; }
 
         body {
             background: var(--bg); color: var(--text);
             font: 14px/1.5 var(--font);
             min-height: 100vh;
             padding: 2rem 1.5rem 4rem;
+            position: relative;
+            overflow-x: hidden;
         }
 
-        .page { max-width: 1000px; margin: 0 auto; }
+        /* ── Ambient background: aurora + scanlines ───────────────── */
+        body::before {
+            content: "";
+            position: fixed; inset: -30%;
+            z-index: 0; pointer-events: none;
+            filter: blur(80px); opacity: 0.5;
+            background:
+                radial-gradient(38% 38% at 72% 30%, var(--neon) 0%, transparent 60%),
+                radial-gradient(34% 34% at 28% 72%, #00b3ff 0%, transparent 60%),
+                radial-gradient(30% 30% at 85% 80%, #12ffcf 0%, transparent 62%);
+            animation: auroraDrift 18s ease-in-out infinite alternate;
+        }
+        @keyframes auroraDrift { to { transform: translate(-3%, 3%) scale(1.08); } }
+
+        body::after {
+            content: "";
+            position: fixed; inset: 0;
+            z-index: 40; pointer-events: none;
+            background: repeating-linear-gradient(0deg, rgba(0, 255, 160, 0.035) 0 1px, transparent 1px 3px);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            body::before { animation: none; }
+        }
+
+        .page { position: relative; z-index: 10; max-width: 1000px; margin: 0 auto; }
 
         h1 {
             font-size: 1.1rem; font-weight: 600;
-            letter-spacing: 0.08em; color: var(--green);
+            letter-spacing: 0.14em; color: var(--neon);
             margin-bottom: 1.25rem;
+            text-shadow: 0 0 16px rgba(0, 255, 160, 0.35);
         }
 
         .authbar {
             display: flex; gap: 0.5rem; align-items: center;
             flex-wrap: wrap;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+            background: var(--glass);
+            border: 1px solid var(--glass-brd);
+            border-radius: 12px;
             padding: 0.9rem 1rem;
             margin-bottom: 1.5rem;
+            backdrop-filter: blur(18px) saturate(1.3);
         }
 
         .authbar-row {
@@ -52,54 +96,65 @@
         .authbar label { color: var(--muted); font-size: 0.75rem; }
 
         input[type="password"], input[type="text"] {
-            background: var(--bg); color: var(--text);
-            border: 1px solid var(--border); border-radius: 5px;
+            background: rgba(0, 10, 7, 0.55); color: var(--text);
+            border: 1px solid var(--glass-brd); border-radius: 6px;
             padding: 0.45rem 0.6rem;
             font: inherit;
             flex: 1 1 260px;
             min-width: 180px;
+            caret-color: var(--neon);
+            transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+        }
+        input[type="password"]:focus, input[type="text"]:focus {
+            outline: none;
+            border-color: var(--border-hi);
+            box-shadow: 0 0 0 3px var(--green-glow);
         }
 
         button {
-            background: var(--surface); color: var(--text);
-            border: 1px solid var(--border); border-radius: 5px;
+            background: var(--glass); color: var(--text);
+            border: 1px solid var(--glass-brd); border-radius: 6px;
             padding: 0.45rem 0.9rem;
             font: inherit; cursor: pointer;
+            transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
         }
-        button:hover { border-color: var(--green); color: var(--green); }
+        button:hover { border-color: var(--border-hi); color: var(--neon); background: rgba(0, 40, 28, 0.55); }
         button.danger:hover { border-color: var(--red); color: var(--red); }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
         #status-msg { font-size: 0.75rem; color: var(--muted); }
         #status-msg.err { color: var(--red); }
-        #status-msg.ok  { color: var(--green); }
+        #status-msg.ok  { color: var(--neon); }
 
         table {
             width: 100%; border-collapse: collapse;
-            background: var(--surface);
-            border: 1px solid var(--border); border-radius: 8px;
+            background: var(--glass);
+            border: 1px solid var(--glass-brd); border-radius: 12px;
             overflow: hidden;
+            backdrop-filter: blur(18px) saturate(1.3);
         }
         th, td {
             text-align: left; padding: 0.55rem 0.8rem;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--glass-brd);
             font-size: 0.8rem;
         }
         th {
             color: var(--muted); font-weight: 600;
-            font-size: 0.68rem; letter-spacing: 0.06em;
+            font-size: 0.68rem; letter-spacing: 0.08em;
             text-transform: uppercase;
+            background: rgba(0, 20, 14, 0.5);
         }
         tr:last-child td { border-bottom: none; }
+        tr:hover td { background: rgba(0, 255, 160, 0.04); }
         td.mono { font-size: 0.72rem; color: var(--muted); word-break: break-all; }
 
         .tier { font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 3px; letter-spacing: 0.04em; }
-        .tier-normal     { color: var(--green); background: rgba(61,220,132,0.1); }
-        .tier-quarantine { color: var(--amber); background: rgba(245,166,35,0.1); }
-        .tier-excluded   { color: var(--red);   background: rgba(229,72,77,0.1); }
+        .tier-normal     { color: var(--neon);  background: rgba(0, 255, 160, 0.12); }
+        .tier-quarantine { color: var(--amber); background: rgba(245, 166, 35, 0.1); }
+        .tier-excluded   { color: var(--red);   background: rgba(245, 75, 75, 0.1); }
 
         .badge-banned { color: var(--red); font-size: 0.7rem; }
-        .badge-verified { color: var(--green); font-size: 0.75rem; margin-left: 0.2rem; }
+        .badge-verified { color: var(--neon); font-size: 0.75rem; margin-left: 0.2rem; }
         .badge-root { color: var(--amber); font-size: 0.65rem; letter-spacing: 0.04em; margin-left: 0.3rem; }
         .muted { color: var(--muted); }
 
@@ -109,7 +164,16 @@
 
         .empty { color: var(--muted); padding: 1.5rem; text-align: center; }
 
-        #greeting { color: var(--green); font-size: 0.8rem; }
+        #greeting { color: var(--neon); font-size: 0.8rem; }
+
+        /* ── Responsive: table scrolls inside its own box, page never does ── */
+        .table-wrap { overflow-x: auto; border-radius: 12px; }
+
+        @media (max-width: 640px) {
+            body { padding: 1.25rem 0.85rem 3rem; }
+            .authbar { padding: 0.75rem; }
+            input[type="password"], input[type="text"] { flex: 1 1 100%; }
+        }
     </style>
 </head>
 <body>
@@ -128,27 +192,29 @@
         <span id="status-msg"></span>
     </div>
 
-    <table id="peer-table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>ID</th>
-                <th>Trust</th>
-                <th>Tier</th>
-                <th>Port</th>
-                <th>Status</th>
-                <th>Role</th>
-                <th>Pubkey FP</th>
-                <th>Last seen</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody id="peer-rows">
-            <tr><td colspan="10" class="empty">Enter a token and click Load.</td></tr>
-        </tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="peer-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>ID</th>
+                    <th>Trust</th>
+                    <th>Tier</th>
+                    <th>Port</th>
+                    <th>Status</th>
+                    <th>Role</th>
+                    <th>Pubkey FP</th>
+                    <th>Last seen</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="peer-rows">
+                <tr><td colspan="10" class="empty">Enter a token and click Load.</td></tr>
+            </tbody>
+        </table>
+    </div>
 </div>
 
-<script src="/static/admin.js"></script>
+<script src="/static/admin.js?v=2"></script>
 </body>
 </html>

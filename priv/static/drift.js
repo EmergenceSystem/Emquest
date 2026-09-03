@@ -342,8 +342,7 @@ function buildMediaBody(item) {
             <div class="media-card media-audio">
                 <div class="media-audio-head">
                     ${thumb ? `<img class="media-thumb media-thumb--audio" loading="lazy"
-                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt=""
-                         onerror="this.remove()">` : ''}
+                         referrerpolicy="no-referrer" src="${escAttr(thumb)}" alt="">` : ''}
                     <div class="media-meta">
                         ${title ? `<span class="item-title">${title}</span>` : ''}
                         ${item.value ? `<p class="item-resume">${highlight(item.value)}</p>` : ''}
@@ -375,8 +374,7 @@ function buildMediaBody(item) {
     const play     = (t === 'video') ? `<span class="media-play">▶</span>` : '';
     const thumbHtml = thumb
         ? `<img class="media-thumb" loading="lazy" referrerpolicy="no-referrer"
-             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}"
-             onload="mediaImgLoad(this)" onerror="mediaImgError(this)">`
+             src="${escAttr(thumb)}" alt="${escAttr(item.label || '')}">`
         : `<span class="media-thumb media-thumb--placeholder" data-type="${escAttr(t)}"></span>`;
     return `
         <div class="media-card media-${escAttr(t)}">
@@ -481,6 +479,18 @@ function appendCard(item, topicIndex) {
         card.innerHTML =
             `<div class="card-topic-tag">${escHtml(TOPICS[topicIndex])}</div>` +
             buildMediaBody(item);
+        /* Media thumbnails: attach load/error handlers programmatically (no
+           inline on*= attributes, for CSP) — mirrors emergence.js. The audio
+           thumb just hides itself on error; the image/video thumb reuses
+           mediaImgLoad/mediaImgError. */
+        card.querySelectorAll('img.media-thumb').forEach(img => {
+            if (img.classList.contains('media-thumb--audio')) {
+                img.addEventListener('error', () => img.remove());
+            } else {
+                img.addEventListener('load', () => mediaImgLoad(img));
+                img.addEventListener('error', () => mediaImgError(img));
+            }
+        });
         if (item.media_type === 'audio') {
             initAudioPlayer(card);
         } else if (item.media_type === 'image') {
