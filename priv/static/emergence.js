@@ -724,7 +724,7 @@ function applyTypeFilter() {
   const list=document.getElementById('results'); if(!list) return;
   list.addEventListener('mousemove',e=>{const c=e.target.closest('.item-card'); if(!c)return;
     const r=c.getBoundingClientRect(),px=(e.clientX-r.left)/r.width-.5,py=(e.clientY-r.top)/r.height-.5;
-    c.style.transform=`rotateY(${px*3.5}deg) rotateX(${-py*3.5}deg) translateZ(4px)`});
+    c.style.transform=`rotateY(${px*1.6}deg) rotateX(${-py*1.6}deg)`});
   list.addEventListener('mouseout',e=>{const c=e.target.closest('.item-card'); if(c)c.style.transform=''});
 })();
 
