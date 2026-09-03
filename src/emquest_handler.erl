@@ -966,19 +966,25 @@ response_ok(RespMap, Items) ->
     case {maps:get(<<"signature">>, RespMap, undefined),
           maps:get(<<"signer_id">>, RespMap, undefined)} of
         {Sig, SignerId} when is_binary(Sig), is_binary(SignerId) ->
-            case decode_b64(SignerId) of
-                error -> false;
-                Id ->
+            case {decode_b64(SignerId), decode_b64(Sig)} of
+                {Id, SigBin} when is_binary(Id), is_binary(SigBin) ->
                     case catch em_pop_store:get_pubkey(Id) of
                         Pub when is_binary(Pub) ->
-                            case decode_b64(Sig) of
-                                error -> false;
-                                SigBin ->
-                                    em_pop_crypto:verify(
-                                        em_pop_crypto:canonical_response(Items), SigBin, Pub)
-                            end;
-                        _ -> false   %% no bound pubkey for this signer
-                    end
+                            %% We CAN verify: a failed check means tampering or a
+                            %% canonical-format mismatch -> always drop, even in
+                            %% optional mode.
+                            em_pop_crypto:verify(
+                                em_pop_crypto:canonical_response(Items), SigBin, Pub);
+                        _ ->
+                            %% Signer unknown (pubkey not propagated yet): we
+                            %% cannot verify. Tolerate during the optional phase,
+                            %% drop only when signatures are enforced.
+                            not require_signatures()
+                    end;
+                _ ->
+                    %% Malformed signature fields: cannot verify -> tolerate
+                    %% unless enforcing.
+                    not require_signatures()
             end;
         _ -> not require_signatures()
     end.

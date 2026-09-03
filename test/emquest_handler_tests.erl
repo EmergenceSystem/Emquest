@@ -145,3 +145,25 @@ fetch_from_disco_blocks_metadata_target_test() ->
     ?assertMatch({error, blocked_ip},
                  emquest_handler:fetch_from_disco(<<"{}">>,
                      "http://169.254.169.254:80/query")).
+
+%% --- response_ok tolerance: optional mode must not drop signed-but-unverifiable ---
+%% A filter that signs but whose pubkey has not propagated to Emquest must NOT be
+%% silently dropped while require_signatures is off (rollout/backward-compat phase).
+
+response_ok_tolerates_unknown_signer_optional_test() ->
+    application:set_env(emquest, require_signatures, false),
+    R = #{<<"signature">> => base64:encode(<<0:512>>),
+          <<"signer_id">> => base64:encode(<<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16>>)},
+    ?assert(emquest_handler:response_ok(R, [#{<<"url">> => <<"x">>}])).
+
+response_ok_drops_unknown_signer_when_enforced_test() ->
+    application:set_env(emquest, require_signatures, true),
+    R = #{<<"signature">> => base64:encode(<<0:512>>),
+          <<"signer_id">> => base64:encode(<<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16>>)},
+    Res = emquest_handler:response_ok(R, [#{<<"url">> => <<"x">>}]),
+    application:set_env(emquest, require_signatures, false),
+    ?assertNot(Res).
+
+response_ok_tolerates_unsigned_optional_test() ->
+    application:set_env(emquest, require_signatures, false),
+    ?assert(emquest_handler:response_ok(#{}, [#{<<"url">> => <<"x">>}])).
