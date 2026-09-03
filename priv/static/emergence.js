@@ -685,6 +685,18 @@ function applyTypeFilter() {
   if (c) c.textContent = visible + (visible === 1 ? ' result' : ' results');
 }
 
+// reveal the "network" nav link only to a signed-in admin (token in IndexedDB)
+(function(){
+  const link=document.getElementById('network-link'); if(!link) return;
+  try{
+    const req=indexedDB.open('emquest_admin',1);
+    req.onupgradeneeded=()=>{try{req.result.createObjectStore('kv')}catch(e){}};
+    req.onsuccess=()=>{try{
+      const g=req.result.transaction('kv','readonly').objectStore('kv').get('token');
+      g.onsuccess=()=>{ if(g.result) link.hidden=false; };
+    }catch(e){}};
+  }catch(e){}
+})();
 // media-type drawer open/close
 (function(){
   const pill=document.getElementById('type-pill'),dr=document.getElementById('type-drawer'),sc=document.getElementById('drawer-scrim');
