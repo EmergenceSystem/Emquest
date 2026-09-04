@@ -57,6 +57,7 @@
 -export([credit/2, penalize/2]).
 -export([accept_peer/1, test_peer/7]).
 -export([merge_peers_from/3, test_state/1, test_peer/1, test_vector/1, has_peer/2]).
+-export([payload_to_peer/1, peer_query_port/1, peer_relay_via/1, peer_vector/1]).
 -export([apply_bans_from/2, test_add_peer/3, is_banned_st/2, state_payload_for_test/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
@@ -115,7 +116,8 @@
     role = hub             :: leaf | hub,         %% role advertised by this peer
     fail_count = 0         :: non_neg_integer(),  %% consecutive failed direct contacts
     pubkey = undefined     :: binary() | undefined,  %% optional ed25519 pubkey (open federation)
-    selfsig = undefined    :: binary() | undefined   %% optional self-signature over the identity
+    selfsig = undefined    :: binary() | undefined,  %% optional self-signature over the identity
+    relay_via = undefined  :: binary() | undefined   %% id of the hub relaying this peer's queries (undefined if not relayed)
 }).
 
 %% gen_server state for the local node.
@@ -1066,7 +1068,7 @@ state_to_payload(#state{id = Id, host = Host, port = Port,
 -spec peer_to_payload(#peer{}) -> map().
 peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
                       name = Name, vector = V, trust = T,
-                      pubkey = PK, selfsig = Sig}) ->
+                      pubkey = PK, selfsig = Sig, relay_via = RelayVia}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => H,
       <<"port">>       => P,
@@ -1075,7 +1077,8 @@ peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
       <<"vector">>     => base64:encode(V),
       <<"trust">>      => T,
       <<"pubkey">>     => case PK  of undefined -> null; _ -> base64:encode(PK)  end,
-      <<"sig">>        => case Sig of undefined -> null; _ -> base64:encode(Sig) end}.
+      <<"sig">>        => case Sig of undefined -> null; _ -> base64:encode(Sig) end,
+      <<"relay_via">>  => case RelayVia of undefined -> null; RV -> base64:encode(RV) end}.
 
 %% Deserialise the remote node's description from a gossip payload.
 -spec payload_to_peer(map()) -> #peer{}.
@@ -1088,13 +1091,22 @@ payload_to_peer(#{<<"id">>     := Id,
         P    -> P
     end,
     Name = maps:get(<<"name">>, Map, <<>>),
+    %% Hub-authoritative vector recompute: when the payload declares its
+    %% own capabilities, derive the vector locally from em_filter_vec
+    %% instead of trusting whatever vector bytes the sender advertised.
+    %% Kept byte-compatible with em_filter_src's payload_to_peer.
+    BaseVec = base64:decode(Vec),
+    VecOut  = case maps:get(<<"capabilities">>, Map, undefined) of
+        undefined -> BaseVec;
+        Caps      -> em_filter_vec:from_capabilities(Caps)
+    end,
     #peer{
         id         = base64:decode(Id),
         host       = Host,
         port       = Port,
         query_port = QPort,
         name       = Name,
-        vector     = base64:decode(Vec),
+        vector     = VecOut,
         base_path  = maps:get(<<"base_path">>, Map, <<>>),
         role       = case maps:get(<<"role">>, Map, <<"hub">>) of
                          <<"leaf">> -> leaf;
@@ -1102,6 +1114,7 @@ payload_to_peer(#{<<"id">>     := Id,
                      end,
         pubkey     = decode_opt(maps:get(<<"pubkey">>, Map, null)),
         selfsig    = decode_opt(maps:get(<<"sig">>,    Map, null)),
+        relay_via  = decode_opt(maps:get(<<"relay_via">>, Map, null)),
         %% Set last_seen to now — we just heard from this node.
         last_seen  = erlang:monotonic_time(millisecond)
     }.
@@ -1186,18 +1199,19 @@ apply_one_ban_decoded({Id, Sig, Signer}, Ts, #{<<"sig">> := SigB64, <<"signer">>
 peer_to_map(#peer{id = Id, host = H, port = P,
                   query_port = QP, name = Name,
                   vector = V, trust = T, last_seen = LS,
-                  base_path = BP, role = Role, pubkey = PK}) ->
+                  base_path = BP, role = Role, pubkey = PK, relay_via = RelayVia}) ->
     #{id         => Id,
       host       => H,
       port       => P,
-      query_port => QP,
+      query_port => case QP of undefined -> null; Q -> Q end,
       name       => Name,
       vector     => V,
       trust      => T,
       last_seen  => LS,
       base_path  => BP,
       role       => Role,
-      pubkey     => PK}.
+      pubkey     => PK,
+      relay_via  => case RelayVia of undefined -> null; RV -> base64:encode(RV) end}.
 
 %% Convert a list of #peer{} records to plain maps.
 -spec peers_to_maps([#peer{}]) -> [map()].
@@ -1284,6 +1298,18 @@ test_peer(Opts) ->
 %% peers whose vector must match the state's dimension.
 -spec test_vector(#state{}) -> binary().
 test_vector(#state{vector = V}) -> V.
+
+%% @doc Test-only accessor: a #peer{}'s query_port field -- eunit helper.
+-spec peer_query_port(#peer{}) -> pos_integer() | undefined.
+peer_query_port(#peer{query_port = QP}) -> QP.
+
+%% @doc Test-only accessor: a #peer{}'s relay_via field -- eunit helper.
+-spec peer_relay_via(#peer{}) -> binary() | undefined.
+peer_relay_via(#peer{relay_via = RV}) -> RV.
+
+%% @doc Test-only accessor: a #peer{}'s vector field -- eunit helper.
+-spec peer_vector(#peer{}) -> binary().
+peer_vector(#peer{vector = V}) -> V.
 
 %% @doc True when State has a peer with the given Id -- eunit helper.
 -spec has_peer(#state{}, binary()) -> boolean().
