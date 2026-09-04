@@ -49,7 +49,7 @@
 
 -export([init/2, fetch_from_agent/2, fetch_from_disco/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, internal_exposed/0,
-         client_ip/1, response_ok/2]).
+         client_ip/1, response_ok/2, fetch_via_relay/3]).
 -export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
@@ -935,18 +935,67 @@ em_auth_headers() ->
 fetch_from_agent(Body, Url) ->
     case emquest_safeurl:safe_post(list_to_binary(Url), em_auth_headers(),
                                    "application/json", Body, [{timeout, 8000}]) of
-        {ok, RespBody} ->
-            try
-                #{<<"results">> := Items0} = RespMap = json:decode(RespBody),
-                Items = case is_list(Items0) of
-                    true  -> Items0;
-                    false -> []
-                end,
-                case response_ok(RespMap, Items) of
-                    true  -> {ok, Items};
-                    false -> {error, bad_signature}
-                end
-            catch _:_ -> {error, invalid_response} end;
+        {ok, RespBody} -> parse_agent_response(RespBody);
+        {error, R} -> {error, R}
+    end.
+
+%% @doc Decode a filter/relay JSON response body of the shape
+%% `{"results": [...], "signer_id": .., "signature": ..}' and verify its
+%% signature via `response_ok/2'. Shared by the direct-agent fetch
+%% (`fetch_from_agent/2') and the relay fetch (`fetch_via_relay/3') — the
+%% em_disco `/relay/query' endpoint round-trips the filter's own signed
+%% result frame unchanged, so both paths see an identical body shape.
+-spec parse_agent_response(binary()) -> {ok, [map()]} | {error, term()}.
+parse_agent_response(RespBody) ->
+    try
+        #{<<"results">> := Items0} = RespMap = json:decode(RespBody),
+        Items = case is_list(Items0) of
+            true  -> Items0;
+            false -> []
+        end,
+        case response_ok(RespMap, Items) of
+            true  -> {ok, Items};
+            false -> {error, bad_signature}
+        end
+    catch _:_ -> {error, invalid_response} end.
+
+%% @doc `emquest, relay_hub_http_port' — the em_disco hub's Cowboy HTTP
+%% listener port that serves `/relay/query' (default 9080, matching
+%% `em_disco''s own `http_port' default). `#peer{}'/`PeerMap' carries no
+%% dedicated HTTP-port field for the hub role, so this is a fixed/
+%% configurable convention rather than something gossiped per-peer.
+-spec relay_hub_http_port() -> pos_integer().
+relay_hub_http_port() ->
+    application:get_env(emquest, relay_hub_http_port, 9080).
+
+%% @doc Resolve the relay hub peer advertising `RelayViaId' (the raw,
+%% already-decoded peer id from a leaf's `relay_via' field) by scanning
+%% the live peer table. `undefined' when the hub is not currently known
+%% (unknown/unreachable relay_via — caller treats this as a peer error).
+-spec find_relay_hub(binary()) -> map() | undefined.
+find_relay_hub(RelayViaId) when is_binary(RelayViaId) ->
+    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    case [P || P <- Peers, maps:get(id, P, undefined) =:= RelayViaId] of
+        [Hub | _] -> Hub;
+        []        -> undefined
+    end.
+
+%% @doc POST a query to `PeerId''s relay hub (`/relay/query') on its
+%% behalf — used when the peer itself exposes no direct `query_port'.
+%% Parses and verifies the response through the same
+%% `parse_agent_response/1' path as a direct agent fetch: the hub
+%% round-trips the filter's own signed result frame unchanged, so no
+%% verify logic is duplicated here.
+-spec fetch_via_relay(binary(), map(), term()) -> {ok, [map()]} | {error, term()}.
+fetch_via_relay(PeerId, HubPeerMap, Query) ->
+    HubHost = binary_to_list(maps:get(host, HubPeerMap, <<>>)),
+    Url = lists:flatten(io_lib:format("http://~s:~w/relay/query",
+                                       [HubHost, relay_hub_http_port()])),
+    Body = iolist_to_binary(json:encode(#{<<"peer_id">> => base64:encode(PeerId),
+                                           <<"query">>   => Query})),
+    case emquest_safeurl:safe_post(list_to_binary(Url), em_auth_headers(),
+                                   "application/json", Body, [{timeout, 8000}]) of
+        {ok, RespBody} -> parse_agent_response(RespBody);
         {error, R} -> {error, R}
     end.
 
@@ -1028,16 +1077,10 @@ endpoint_key(P) ->
 -spec spawn_pop_workers([binary()], [{map(), float()}], pid()) -> [pid()].
 spawn_pop_workers(SubQueries, Peers, Parent) ->
     [spawn(fun() ->
-        H     = binary_to_list(maps:get(host, PeerMap)),
-        QP    = maps:get(query_port, PeerMap),
         Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
-        BP    = binary_to_list(maps:get(base_path, PeerMap, <<>>)),
         Id    = maps:get(id, PeerMap, undefined),
-        Url   = lists:flatten(
-                    agent_query_url(H, QP, BP)),
-        Body  = iolist_to_binary(json:encode(#{<<"query">> => Q})),
-        Tag   = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
-        case fetch_from_agent(Body, Url) of
+        {Tag, FetchResult} = dispatch_pop_worker(Q, PeerMap),
+        case FetchResult of
             {ok, Items} ->
                 case Items of
                     [_|_] when is_binary(Id) -> catch emquest_pop:credit(Id);
@@ -1051,6 +1094,52 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         end
     end)
     || Q <- SubQueries, {PeerMap, _Score} <- Peers].
+
+%% @private
+%% @doc Build the `{Tag, FetchResult}' pair for one (sub-query, peer)
+%% worker. A peer with a direct `query_port' is queried over HTTP as
+%% before. A peer with no direct port (`query_port' is `null' — see
+%% `em_pop_node:peer_to_map/1' — or absent) but a bound `relay_via' is
+%% routed through that hub's `/relay/query' instead. Any other
+%% combination (no port, no relay, or an unresolvable/unreachable hub)
+%% is treated as a peer error: skipped with an `{error, _}' result so
+%% the caller penalizes it exactly like a failed direct fetch.
+dispatch_pop_worker(Q, PeerMap) ->
+    H  = binary_to_list(maps:get(host, PeerMap, <<>>)),
+    BP = binary_to_list(maps:get(base_path, PeerMap, <<>>)),
+    Id = maps:get(id, PeerMap, undefined),
+    case maps:get(query_port, PeerMap, undefined) of
+        QP when is_integer(QP) ->
+            Url  = lists:flatten(agent_query_url(H, QP, BP)),
+            Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
+            Tag  = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
+            {Tag, fetch_from_agent(Body, Url)};
+        _NoDirectPort ->
+            case decode_relay_via(maps:get(relay_via, PeerMap, undefined)) of
+                RelayViaId when is_binary(RelayViaId) ->
+                    Tag = iolist_to_binary([Q, " @relay ", H]),
+                    case find_relay_hub(RelayViaId) of
+                        Hub when is_map(Hub), is_binary(Id) ->
+                            {Tag, fetch_via_relay(Id, Hub, Q)};
+                        _ ->
+                            {Tag, {error, relay_hub_unknown}}
+                    end;
+                undefined ->
+                    Tag = iolist_to_binary([Q, " @pop ", H, ":unroutable"]),
+                    {Tag, {error, unroutable}}
+            end
+    end.
+
+%% @private Decode a peer map's `relay_via' (`null' | base64 binary |
+%% `undefined') to the hub's raw id, or `undefined' when the peer is not
+%% relayed / the field is malformed.
+decode_relay_via(null) -> undefined;
+decode_relay_via(undefined) -> undefined;
+decode_relay_via(B) when is_binary(B) ->
+    case catch base64:decode(B) of
+        D when is_binary(D) -> D;
+        _ -> undefined
+    end.
 
 %%====================================================================
 %% Text scoring
