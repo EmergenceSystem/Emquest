@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=6">
+    <link rel="stylesheet" href="/static/style.css?v=34">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -36,7 +36,7 @@
                     <textarea
                         id="query-input"
                         class="query-input"
-                        placeholder="Ask anything — search, DNS, knowledge..."
+                        placeholder="Search the distributed mesh…"
                         rows="1"
                         autocomplete="off"
                         spellcheck="false"
@@ -48,6 +48,13 @@
                             <line x1="5" y1="12" x2="19" y2="12"/>
                         </svg>
                     </button>
+                    <button class="mic-btn" id="mic-btn" type="button" aria-label="Voice search" title="Dictate your query (local STT)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="2" width="6" height="12" rx="3"/>
+                            <path d="M5 11a7 7 0 0 0 14 0"/>
+                            <line x1="12" y1="18" x2="12" y2="22"/>
+                        </svg>
+                    </button>
                     <button class="send-btn" id="send-btn" aria-label="Send">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="22" y1="2" x2="11" y2="13"/>
@@ -55,9 +62,9 @@
                         </svg>
                     </button>
                 </div>
+                <button class="type-pill" id="type-pill" type="button">▚ Media type</button>
                 <!-- Status line below search box -->
                 <div class="search-meta" id="search-meta">
-                    <span class="meta-hint">↵ send &nbsp;·&nbsp; shift+↵ newline</span>
                     <span class="meta-status" id="meta-status"></span>
                 </div>
             </div>
@@ -77,12 +84,8 @@
 
         <!-- Empty state -->
         <div class="empty-state" id="empty-state">
-            <div class="empty-grid">
-                <div class="empty-cell">web search</div>
-                <div class="empty-cell">DNS lookup</div>
-                <div class="empty-cell">knowledge</div>
-                <div class="empty-cell">synthesis</div>
-            </div>
+            <h1 class="welcome-title">Distributed discovery.</h1>
+            <p class="welcome-text">Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
             <p class="empty-hint">All agents stand by.</p>
         </div>
 
@@ -102,7 +105,22 @@
         <span class="footer-info">v2.2.0</span>
     </footer>
 
+    <!-- Media-type filter drawer -->
+    <div class="drawer-scrim" id="drawer-scrim"></div>
+    <aside class="type-drawer" id="type-drawer" aria-label="Media type">
+        <h2>// MEDIA TYPE</h2>
+        <div class="type-drawer-sub">Show only the selected types.</div>
+        <div class="type-filters" id="type-filters">
+            <label><input type="checkbox" value="text" checked> text</label>
+            <label><input type="checkbox" value="image" checked> image</label>
+            <label><input type="checkbox" value="audio" checked> audio</label>
+            <label><input type="checkbox" value="video" checked> video</label>
+            <label><input type="checkbox" value="document" checked> document</label>
+            <span class="tf-count" id="tf-count"></span>
+        </div>
+    </aside>
+
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=4"></script>
+    <script src="/static/emergence.js?v=39"></script>
 </body>
 </html>

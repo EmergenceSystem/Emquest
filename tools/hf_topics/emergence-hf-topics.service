@@ -1,0 +1,16 @@
+[Unit]
+Description=Emergence HF topic extraction (KeyBERT/MiniLM)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment=HF_HOME=/home/ubuntu/.cache/huggingface
+ExecStart=/home/ubuntu/hfenv/bin/uvicorn hf_topics:app --host 127.0.0.1 --port 8085
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

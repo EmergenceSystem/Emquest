@@ -39,7 +39,27 @@ start(_StartType, _StartArgs) ->
         true  -> application:ensure_all_started(cowboy);
         false -> ok
     end,
+    load_local_secrets(),
     emquest_sup:start_link().
+
+%% @private Load admin secrets (admin_tokens/admin_ips) from an untracked local
+%% file so they never live in the tracked sys.config — keeping secrets out of git
+%% and out of merge conflicts. File is a list of `{Key, Value}.' Erlang terms;
+%% path defaults to `config/admin.secret' (relative to the service cwd), override
+%% with the `EMQUEST_ADMIN_SECRET' env var.
+-spec load_local_secrets() -> ok.
+load_local_secrets() ->
+    File = case os:getenv("EMQUEST_ADMIN_SECRET") of
+               false -> "config/admin.secret";
+               P     -> P
+           end,
+    case file:consult(File) of
+        {ok, Terms} ->
+            [application:set_env(emquest, K, V) || {K, V} <- Terms],
+            logger:notice("[emquest] loaded ~p admin secret key(s) from ~s",
+                          [length(Terms), File]);
+        {error, _} -> ok
+    end.
 
 %% @doc Stop the Emquest application.
 %%

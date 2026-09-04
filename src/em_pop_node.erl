@@ -52,7 +52,10 @@
 
 -export([start_link/1]).
 -export([get_id/1, get_vector/1, add_peer/3, get_peers/1,
-         peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2]).
+         peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2,
+         ban/3, unban/2, is_banned/2, set_trust/3]).
+-export([credit/2, penalize/2]).
+-export([accept_peer/1, test_peer/7]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %%====================================================================
@@ -86,6 +89,12 @@
 -define(TRUST_MAX,                  1.00).
 -define(TRUST_MIN,                  0.00).
 
+%% Consecutive failed direct contacts before a peer is declared dead.
+-define(DEFAULT_DEAD_THRESHOLD,        3).
+
+%% Milliseconds a dead peer is refused re-entry (blocks gossip re-infection).
+-define(DEFAULT_QUARANTINE_TTL,   60_000).
+
 %%====================================================================
 %% Records
 %%====================================================================
@@ -99,7 +108,12 @@
     name = <<>>            :: binary(),           %% human-readable agent name (OTP app name)
     vector                 :: binary(),           %% capability vector (f32 flat binary)
     trust = 0.0            :: float(),            %% trust score in [0.0, 1.0]
-    last_seen              :: integer()           %% erlang:monotonic_time(millisecond)
+    last_seen              :: integer(),          %% erlang:monotonic_time(millisecond)
+    base_path = <<>>       :: binary(),           %% public path prefix (hub-rewritten leaf)
+    role = hub             :: leaf | hub,         %% role advertised by this peer
+    fail_count = 0         :: non_neg_integer(),  %% consecutive failed direct contacts
+    pubkey = undefined     :: binary() | undefined,  %% optional ed25519 pubkey (open federation)
+    selfsig = undefined    :: binary() | undefined   %% optional self-signature over the identity
 }).
 
 %% gen_server state for the local node.
@@ -114,7 +128,12 @@
     kvex_ix                     :: term(),                     %% kvex cosine-search index
     stale_timeout               :: pos_integer(),              %% peer eviction threshold (ms)
     gossip_interval             :: non_neg_integer(),          %% background tick interval (ms)
-    max_peers                   :: pos_integer()               %% peer list capacity
+    max_peers                   :: pos_integer(),              %% peer list capacity
+    seeds = []                  :: [{string(), inet:port_number()}],  %% bootstrap/heal seeds
+    quarantine = #{}            :: #{binary() => integer()},          %% dead peer id => expiry (mono ms)
+    dead_threshold = 3          :: pos_integer(),                     %% failed contacts before dead
+    quarantine_ttl = 60000      :: pos_integer(),                     %% ms a dead peer is refused
+    banned = #{}                :: #{binary() => true}                %% persisted-ban set (by peer id)
 }).
 
 %%====================================================================
@@ -180,6 +199,32 @@ peers_for(Pid, Vec, K) -> gen_server:call(Pid, {peers_for, Vec, K}).
 -spec get_trust(pid(), binary()) -> float().
 get_trust(Pid, PeerId) -> gen_server:call(Pid, {get_trust, PeerId}).
 
+%% @doc Ban a peer: evict it immediately and persist the ban so it is
+%% refused re-entry (even across a node restart, when a state_file is set).
+-spec ban(pid(), binary(), binary()) -> ok.
+ban(Pid, PeerId, Reason) -> gen_server:call(Pid, {ban, PeerId, Reason}).
+
+%% @doc Lift a ban on PeerId.
+-spec unban(pid(), binary()) -> ok.
+unban(Pid, PeerId) -> gen_server:call(Pid, {unban, PeerId}).
+
+%% @doc Return whether PeerId is currently banned.
+-spec is_banned(pid(), binary()) -> boolean().
+is_banned(Pid, PeerId) -> gen_server:call(Pid, {is_banned, PeerId}).
+
+%% @doc Force-set a peer's trust score (clamped to [TRUST_MIN, TRUST_MAX])
+%% and persist it.
+-spec set_trust(pid(), binary(), float()) -> ok.
+set_trust(Pid, PeerId, Trust) -> gen_server:call(Pid, {set_trust, PeerId, Trust}).
+
+%% @doc Asynchronously raise a peer's trust after a good query response.
+-spec credit(pid(), binary()) -> ok.
+credit(Pid, PeerId) -> gen_server:cast(Pid, {credit, PeerId}).
+
+%% @doc Asynchronously lower a peer's trust after a failed query.
+-spec penalize(pid(), binary()) -> ok.
+penalize(Pid, PeerId) -> gen_server:cast(Pid, {penalize, PeerId}).
+
 %%--------------------------------------------------------------------
 %% @doc Trigger one synchronous gossip tick.
 %%
@@ -226,17 +271,29 @@ init(Opts) ->
     Port      = maps:get(port,            Opts),
     Vec       = maps:get(vector,          Opts),
     StaleT    = maps:get(stale_timeout,   Opts, ?DEFAULT_STALE_TIMEOUT),
+    DeadT     = maps:get(dead_threshold,  Opts, ?DEFAULT_DEAD_THRESHOLD),
+    QTtl      = maps:get(quarantine_ttl,  Opts, ?DEFAULT_QUARANTINE_TTL),
     GossipI   = maps:get(gossip_interval, Opts, ?DEFAULT_GOSSIP_INTERVAL),
+    Seeds     = maps:get(seeds, Opts, []),
     MaxP      = maps:get(max_peers,       Opts, ?DEFAULT_MAX_PEERS),
     QueryPort = maps:get(query_port,      Opts, undefined),
     Name      = maps:get(name,            Opts, <<>>),
     Id      = generate_id(),
+    case os:getenv("EM_POP_AUTH_TOKEN") of
+        false -> ok;
+        ""    -> ok;
+        Tk    -> application:set_env(em_filter, auth_token, list_to_binary(Tk))
+    end,
 
     %% Vector dimension is byte_size / 4 because each float is 32-bit.
     Dim = byte_size(Vec) div 4,
 
     %% httpc lives inside the inets application — start it if not yet up.
     application:ensure_all_started(inets),
+    %% cowboy (and its ranch dependency) back the gossip HTTP listener —
+    %% normally already running as part of the emquest app's supervision
+    %% tree, but standalone eunit tests start em_pop_node in isolation.
+    application:ensure_all_started(cowboy),
 
     %% Start the Cowboy listener that will accept incoming gossip POSTs.
     ok = start_listener(Port, self()),
@@ -252,6 +309,20 @@ init(Opts) ->
 
     ?LOG_INFO("em_pop node started id=~s port=~w", [short_id(Id), Port]),
 
+    %% Open the persistent reputation store (if configured) and load the
+    %% ban list into memory so is_banned/2 stays a cheap map lookup.
+    Banned = case maps:get(state_file, Opts, undefined) of
+        undefined -> #{};
+        StateFile ->
+            ok = filelib:ensure_dir(StateFile),
+            case em_pop_store:open(StateFile) of
+                {ok, _} -> maps:map(fun(_, _) -> true end, em_pop_store:all_bans());
+                {error, R} ->
+                    ?LOG_WARNING("[em_pop] store open failed ~p: ~p", [StateFile, R]),
+                    #{}
+            end
+    end,
+
     {ok, #state{
         id              = Id,
         port            = Port,
@@ -261,7 +332,11 @@ init(Opts) ->
         kvex_ix         = Ix,
         stale_timeout   = StaleT,
         gossip_interval = GossipI,
-        max_peers       = MaxP
+        max_peers       = MaxP,
+        seeds           = Seeds,
+        dead_threshold  = DeadT,
+        quarantine_ttl  = QTtl,
+        banned          = Banned
     }}.
 
 %% --- Simple state accessors ---
@@ -330,6 +405,34 @@ handle_call({get_trust, PeerId}, _From, #state{peers = Peers} = State) ->
     end,
     {reply, Trust, State};
 
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Ban / unban / query-ban-status / force-set-trust.
+%%
+%% These persist to em_pop_store when a state_file was configured; the
+%% store call is `catch'-guarded so a closed/absent store never crashes
+%% the node (e.g. every existing test that omits state_file).
+%% @end
+%%--------------------------------------------------------------------
+handle_call({ban, PeerId, Reason}, _From, #state{peers = Peers, banned = B} = State) ->
+    catch em_pop_store:ban(PeerId, Reason),
+    {reply, ok, State#state{peers = maps:remove(PeerId, Peers), banned = B#{PeerId => true}}};
+
+handle_call({unban, PeerId}, _From, #state{banned = B} = State) ->
+    catch em_pop_store:unban(PeerId),
+    {reply, ok, State#state{banned = maps:remove(PeerId, B)}};
+
+handle_call({is_banned, PeerId}, _From, #state{banned = B} = State) ->
+    {reply, maps:is_key(PeerId, B), State};
+
+handle_call({set_trust, PeerId, Trust}, _From, #state{peers = Peers} = State) ->
+    T = max(?TRUST_MIN, min(?TRUST_MAX, Trust)),
+    catch em_pop_store:put_trust(PeerId, T, erlang:monotonic_time(millisecond)),
+    case maps:find(PeerId, Peers) of
+        {ok, Peer} -> {reply, ok, State#state{peers = Peers#{PeerId => Peer#peer{trust = T}}}};
+        error      -> {reply, ok, State}
+    end;
+
 %% Synchronous gossip tick — no-op when there are no peers yet.
 handle_call(gossip_tick, _From, #state{peers = Peers} = State)
         when map_size(Peers) =:= 0 ->
@@ -356,8 +459,8 @@ handle_call(gossip_tick, _From, State) ->
         {error, Reason} ->
             ?LOG_DEBUG("em_pop gossip_tick failed peer=~s reason=~p",
                        [short_id(PeerId), Reason]),
-            %% Failed exchange — penalise the peer's trust score.
-            decay_trust(PeerId, State)
+            %% Failed exchange — count it toward quarantine.
+            mark_failure(PeerId, State)
     end,
     {reply, ok, NewState};
 
@@ -380,6 +483,22 @@ handle_call({handle_gossip, InPayload}, _From, State) ->
 
 handle_call(_Msg, _From, State) ->
     {reply, {error, unknown_call}, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Async trust signals from a query-response outcome (not gossip).
+%%
+%% `credit' rewards a peer that answered a fan-out query well;
+%% `penalize' punishes one that errored/timed out. This closes the gap
+%% for leaf filters that are only ever learned transitively via the
+%% disco hub's gossip and never gossip directly, so their trust would
+%% otherwise never move off its seeded value.
+%% @end
+%%--------------------------------------------------------------------
+handle_cast({credit, PeerId}, #state{peers = Peers} = State) ->
+    {noreply, adjust_trust(PeerId, ?TRUST_INCREMENT, Peers, State)};
+handle_cast({penalize, PeerId}, #state{peers = Peers} = State) ->
+    {noreply, adjust_trust(PeerId, -?TRUST_DECAY, Peers, State)};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -414,6 +533,15 @@ handle_info(gossip_timer, #state{gossip_interval = I,
     end,
     %% Evict stale peers before rescheduling.
     State1 = cleanup_stale(St, State),
+    SelfPid0 = self(),
+    %% Always re-gossip the configured seeds each tick so the federation
+    %% anchors (and the leaves they advertise) never age out between the rare
+    %% random-target gossips.
+    lists:foreach(fun({SdH, SdP}) ->
+        spawn(fun() ->
+            catch gen_server:call(SelfPid0, {add_peer, SdH, SdP}, 15_000)
+        end)
+    end, State1#state.seeds),
     erlang:send_after(I, self(), gossip_timer),
     {noreply, State1};
 
@@ -429,7 +557,7 @@ handle_info({gossip_result, _PeerId, {ok, RemotePayload}}, State) ->
 handle_info({gossip_result, PeerId, {error, Reason}}, State) ->
     ?LOG_DEBUG("em_pop bg gossip failed peer=~s reason=~p",
                [short_id(PeerId), Reason]),
-    {noreply, decay_trust(PeerId, State)};
+    {noreply, mark_failure(PeerId, State)};
 
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -475,7 +603,47 @@ pick_gossip_target(#state{peers = Peers}) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec upsert_peer(#peer{}, #state{}) -> #state{}.
-upsert_peer(#peer{id = Id} = New,
+upsert_peer(#peer{id = Id}, #state{banned = Banned} = State)
+        when is_map_key(Id, Banned) ->
+    %% Refuse a banned id outright — no insert, no reindex.
+    State;
+upsert_peer(#peer{} = New, State) ->
+    case accept_peer(New) of
+        false -> State;
+        true  -> upsert_peer_ok(New, State)
+    end.
+
+%% @private Decide whether to admit a peer learned from gossip.
+%% Backward-compat: a peer WITHOUT a pubkey is accepted (unverified) as before.
+%% A peer WITH pubkey+selfsig must: (a) pass verify_selfsig, and (b) satisfy
+%% trust-on-first-use — the first pubkey seen for an id is bound persistently;
+%% a later, DIFFERENT pubkey for the same id is rejected (id-takeover attempt).
+-spec accept_peer(#peer{}) -> boolean().
+accept_peer(#peer{pubkey = undefined}) -> true;
+accept_peer(#peer{pubkey = Pub, selfsig = Sig, id = Id, host = H,
+                  port = P, query_port = QP, name = Name})
+        when is_binary(Pub), is_binary(Sig) ->
+    Ident = #{id => Id, host => H, port => P, query_port => QP,
+              name => Name, pubkey => Pub, sig => Sig},
+    case em_pop_crypto:verify_selfsig(Ident) of
+        false -> false;
+        true ->
+            case catch em_pop_store:get_pubkey(Id) of
+                Pub       -> true;                         %% same key re-seen
+                undefined -> catch em_pop_store:put_pubkey(Id, Pub), true;  %% TOFU first bind
+                _Other    -> false                          %% id claimed by a different key
+            end
+    end;
+accept_peer(#peer{pubkey = Pub}) when is_binary(Pub) -> false.  %% pubkey but no/!bin sig
+
+%% @private Test-only constructor for a #peer{} (used by eunit).
+test_peer(Id, Host, Port, QP, Name, PK, Sig) ->
+    #peer{id = Id, host = Host, port = Port, query_port = QP, name = Name,
+          vector = <<0,0,0,0>>, pubkey = PK, selfsig = Sig,
+          last_seen = erlang:monotonic_time(millisecond)}.
+
+-spec upsert_peer_ok(#peer{}, #state{}) -> #state{}.
+upsert_peer_ok(#peer{id = Id} = New,
             #state{peers = Peers, kvex_ix = Ix} = State) ->
     {Trust, NeedsReindex} = case maps:find(Id, Peers) of
         {ok, #peer{trust = T, vector = OldVec}} ->
@@ -485,23 +653,35 @@ upsert_peer(#peer{id = Id} = New,
         error ->
             %% First contact — insert vector into the index immediately.
             kvex:add(Ix, Id, New#peer.vector),
-            {?TRUST_INIT, false}
+            %% Prefer a trust score persisted from a previous session over
+            %% the default TRUST_INIT.
+            Seed = case catch em_pop_store:get_trust(Id) of
+                       {T0, _} when is_float(T0) -> T0;
+                       _ -> ?TRUST_INIT
+                   end,
+            {Seed, false}
     end,
+    Now = erlang:monotonic_time(millisecond),
+    catch em_pop_store:put_trust(Id, Trust, Now),
+    Q1 = maps:remove(Id, State#state.quarantine),
     case NeedsReindex of
         true ->
             %% Vector changed — rebuild the entire index for consistency.
             rebuild_kvex(State#state{
+                quarantine = Q1,
                 peers = Peers#{Id => New#peer{
-                    trust     = Trust,
-                    last_seen = erlang:monotonic_time(millisecond)
+                    trust      = Trust,
+                    fail_count = 0,
+                    last_seen  = Now
                 }}
             });
         false ->
             Updated = New#peer{
-                trust     = Trust,
-                last_seen = erlang:monotonic_time(millisecond)
+                trust      = Trust,
+                fail_count = 0,
+                last_seen  = Now
             },
-            State#state{peers = Peers#{Id => Updated}}
+            State#state{quarantine = Q1, peers = Peers#{Id => Updated}}
     end.
 
 %%--------------------------------------------------------------------
@@ -515,11 +695,61 @@ upsert_peer(#peer{id = Id} = New,
 -spec decay_trust(binary(), #state{}) -> #state{}.
 decay_trust(PeerId, #state{peers = Peers} = State) ->
     case maps:find(PeerId, Peers) of
-        {ok, #peer{trust = T} = Peer} ->
+        {ok, #peer{trust = T, last_seen = LS} = Peer} ->
             NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
+            catch em_pop_store:put_trust(PeerId, NewTrust, LS),
             State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
         error ->
             %% Peer disappeared between the spawn and the result — ignore.
+            State
+    end.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc Adjust one peer's trust by Delta, clamped to [TRUST_MIN, TRUST_MAX]
+%% and write-through persisted. Used by the async `credit'/`penalize'
+%% API — the query-response counterpart to `decay_trust'/`mark_failure',
+%% which only fire on direct gossip exchanges.
+%%
+%% Unknown peer ids are ignored (State returned unchanged): a query
+%% result can race a peer's eviction.
+%% @end
+%%--------------------------------------------------------------------
+-spec adjust_trust(binary(), float(), #{binary() => #peer{}}, #state{}) -> #state{}.
+adjust_trust(PeerId, Delta, Peers, State) ->
+    case maps:find(PeerId, Peers) of
+        {ok, #peer{trust = T, last_seen = LS} = Peer} ->
+            NewTrust = max(?TRUST_MIN, min(?TRUST_MAX, T + Delta)),
+            catch em_pop_store:put_trust(PeerId, NewTrust, LS),
+            State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
+        error ->
+            State
+    end.
+
+%% @private
+%% @doc Count a failed direct contact; after dead_threshold consecutive
+%% failures evict the peer and quarantine it so gossip cannot re-learn it
+%% until it comes back (and answers) again.
+-spec mark_failure(binary(), #state{}) -> #state{}.
+mark_failure(PeerId, #state{peers = Peers, quarantine = Q,
+                            dead_threshold = DeadT, quarantine_ttl = TTL} = State) ->
+    case maps:find(PeerId, Peers) of
+        {ok, #peer{fail_count = FC, trust = T} = Peer} ->
+            FC1 = FC + 1,
+            case FC1 >= DeadT of
+                true ->
+                    Now = erlang:monotonic_time(millisecond),
+                    rebuild_kvex(State#state{
+                        peers      = maps:remove(PeerId, Peers),
+                        quarantine = Q#{PeerId => Now + TTL}
+                    });
+                false ->
+                    NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
+                    catch em_pop_store:put_trust(PeerId, NewTrust, Peer#peer.last_seen),
+                    State#state{peers = Peers#{PeerId =>
+                        Peer#peer{fail_count = FC1, trust = NewTrust}}}
+            end;
+        error ->
             State
     end.
 
@@ -542,26 +772,75 @@ merge_peers([], State) ->
 merge_peers([#peer{id = Id} | Rest], #state{id = Id} = State) ->
     %% This entry describes ourselves — skip.
     merge_peers(Rest, State);
+merge_peers([#peer{id = Id} | Rest], #state{banned = Banned} = State)
+        when is_map_key(Id, Banned) ->
+    %% Refuse a banned id — gossip must not re-infect us with it.
+    merge_peers(Rest, State);
 merge_peers([P | Rest],
-            #state{peers = Peers, max_peers = Max, kvex_ix = Ix} = State) ->
+            #state{peers = Peers, max_peers = Max, kvex_ix = Ix,
+                   quarantine = Q} = State) ->
+    Now = erlang:monotonic_time(millisecond),
+    Quarantined = case maps:find(P#peer.id, Q) of
+                      {ok, Exp} -> Now < Exp;
+                      error     -> false
+                  end,
     case maps:is_key(P#peer.id, Peers) of
         true ->
-            %% Already in the table — direct contact (upsert_peer) will
-            %% refresh it when we gossip with it.
+            Old = maps:get(P#peer.id, Peers),
+            case Old#peer.host =:= P#peer.host
+                 andalso Old#peer.base_path =:= P#peer.base_path of
+                true ->
+                    %% Same address — leave it; direct contact refreshes it.
+                    merge_peers(Rest, State);
+                false ->
+                    %% A hub re-advertised this peer at a different (rewritten)
+                    %% address; adopt it so we query the right endpoint.
+                    case Old#peer.host =:= <<"localhost">>
+                         orelse Old#peer.host =:= <<"127.0.0.1">> of
+                        true ->
+                            %% Keep a directly-registered local leaf; never let a
+                            %% rewritten public address learned via gossip clobber
+                            %% its localhost registration (that would stop us from
+                            %% advertising our own leaf).
+                            merge_peers(Rest, State);
+                        false ->
+                            Updated = Old#peer{host       = P#peer.host,
+                                               port       = P#peer.port,
+                                               query_port = P#peer.query_port,
+                                               base_path  = P#peer.base_path,
+                                               last_seen  = erlang:monotonic_time(millisecond)},
+                            merge_peers(Rest, State#state{peers = Peers#{P#peer.id => Updated}})
+                    end
+            end;
+        false when Quarantined ->
+            %% Recently declared dead — refuse re-entry until quarantine expires.
             merge_peers(Rest, State);
         false when map_size(Peers) >= Max ->
             %% Peer list at capacity — stop adding more.
             ?LOG_DEBUG("em_pop max_peers=~w reached, dropping new peer", [Max]),
             State;
         false ->
-            %% New peer discovered transitively — index it and add to map.
-            kvex:add(Ix, P#peer.id, P#peer.vector),
-            NewPeer = P#peer{
-                trust     = ?TRUST_MIN,
-                last_seen = erlang:monotonic_time(millisecond)
-            },
-            State1 = State#state{peers = Peers#{P#peer.id => NewPeer}},
-            merge_peers(Rest, State1)
+            ExpBytes = byte_size(State#state.vector),
+            Acceptable = byte_size(P#peer.vector) =:= ExpBytes andalso ExpBytes > 0
+                         andalso accept_peer(P),
+            case Acceptable of
+                false -> merge_peers(Rest, State);
+                true ->
+                    kvex:add(Ix, P#peer.id, P#peer.vector),
+                    %% Restore persisted trust (a peer learned transitively via
+                    %% gossip is never contacted directly, so without this its
+                    %% earned trust would reset to 0 on every restart).
+                    Seed = case catch em_pop_store:get_trust(P#peer.id) of
+                               {T0, _} when is_float(T0) -> T0;
+                               _ -> ?TRUST_MIN
+                           end,
+                    NewPeer = P#peer{
+                        trust     = Seed,
+                        last_seen = erlang:monotonic_time(millisecond)
+                    },
+                    State1 = State#state{peers = Peers#{P#peer.id => NewPeer}},
+                    merge_peers(Rest, State1)
+            end
     end.
 
 %%--------------------------------------------------------------------
@@ -573,8 +852,10 @@ merge_peers([P | Rest],
 %% @end
 %%--------------------------------------------------------------------
 -spec cleanup_stale(pos_integer(), #state{}) -> #state{}.
-cleanup_stale(Timeout, #state{peers = Peers} = State) ->
+cleanup_stale(Timeout, #state{peers = Peers, quarantine = Q0} = State0) ->
     Now   = erlang:monotonic_time(millisecond),
+    Q1    = maps:filter(fun(_, Exp) -> Now < Exp end, Q0),
+    State = State0#state{quarantine = Q1},
     Alive = maps:filter(fun(_, #peer{last_seen = LS}) ->
         Now - LS < Timeout
     end, Peers),
@@ -650,6 +931,8 @@ listener_ref(Port) -> {em_pop_listener, Port}.
 
 %% Build the full URL for a peer's gossip endpoint.
 -spec gossip_url(string(), inet:port_number()) -> string().
+gossip_url(Host, 443) ->
+    lists:flatten(io_lib:format("https://~s/pop/gossip", [Host]));
 gossip_url(Host, Port) ->
     lists:flatten(io_lib:format("http://~s:~w/pop/gossip", [Host, Port])).
 
@@ -664,7 +947,11 @@ gossip_url(Host, Port) ->
 -spec http_post(string(), map()) -> {ok, map()} | {error, term()}.
 http_post(Url, Payload) ->
     Body = iolist_to_binary(json:encode(Payload)),
-    Req  = {Url, [], "application/json", Body},
+    Hdrs = case application:get_env(em_filter, auth_token, undefined) of
+               undefined -> [];
+               Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
+           end,
+    Req  = {Url, Hdrs, "application/json", Body},
     Opts = [{timeout, ?GOSSIP_HTTP_TIMEOUT}],
     case httpc:request(post, Req, Opts, [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, RespBody}} ->
@@ -702,14 +989,17 @@ state_to_payload(#state{id = Id, host = Host, port = Port,
 %% Serialise one #peer{} record for embedding in a payload.
 -spec peer_to_payload(#peer{}) -> map().
 peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
-                      name = Name, vector = V, trust = T}) ->
+                      name = Name, vector = V, trust = T,
+                      pubkey = PK, selfsig = Sig}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => H,
       <<"port">>       => P,
       <<"query_port">> => case QP of undefined -> null; Q -> Q end,
       <<"name">>       => Name,
       <<"vector">>     => base64:encode(V),
-      <<"trust">>      => T}.
+      <<"trust">>      => T,
+      <<"pubkey">>     => case PK  of undefined -> null; _ -> base64:encode(PK)  end,
+      <<"sig">>        => case Sig of undefined -> null; _ -> base64:encode(Sig) end}.
 
 %% Deserialise the remote node's description from a gossip payload.
 -spec payload_to_peer(map()) -> #peer{}.
@@ -729,9 +1019,28 @@ payload_to_peer(#{<<"id">>     := Id,
         query_port = QPort,
         name       = Name,
         vector     = base64:decode(Vec),
+        base_path  = maps:get(<<"base_path">>, Map, <<>>),
+        role       = case maps:get(<<"role">>, Map, <<"hub">>) of
+                         <<"leaf">> -> leaf;
+                         _          -> hub
+                     end,
+        pubkey     = decode_opt(maps:get(<<"pubkey">>, Map, null)),
+        selfsig    = decode_opt(maps:get(<<"sig">>,    Map, null)),
         %% Set last_seen to now — we just heard from this node.
         last_seen  = erlang:monotonic_time(millisecond)
     }.
+
+%% @private Decode an optional base64 field; returns undefined when absent
+%% (JSON null / missing key) or when decoding fails on garbage input.
+-spec decode_opt(binary() | null | undefined) -> binary() | undefined.
+decode_opt(null)      -> undefined;
+decode_opt(undefined) -> undefined;
+decode_opt(B) when is_binary(B) ->
+    case catch base64:decode(B) of
+        D when is_binary(D) -> D;
+        _                   -> undefined
+    end;
+decode_opt(_) -> undefined.
 
 %% Extract the list of peers embedded in a gossip payload.
 -spec payload_to_peers(map()) -> [#peer{}].
@@ -745,7 +1054,8 @@ payload_to_peers(_) ->
 -spec peer_to_map(#peer{}) -> map().
 peer_to_map(#peer{id = Id, host = H, port = P,
                   query_port = QP, name = Name,
-                  vector = V, trust = T, last_seen = LS}) ->
+                  vector = V, trust = T, last_seen = LS,
+                  base_path = BP, role = Role, pubkey = PK}) ->
     #{id         => Id,
       host       => H,
       port       => P,
@@ -753,7 +1063,10 @@ peer_to_map(#peer{id = Id, host = H, port = P,
       name       => Name,
       vector     => V,
       trust      => T,
-      last_seen  => LS}.
+      last_seen  => LS,
+      base_path  => BP,
+      role       => Role,
+      pubkey     => PK}.
 
 %% Convert a list of #peer{} records to plain maps.
 -spec peers_to_maps([#peer{}]) -> [map()].

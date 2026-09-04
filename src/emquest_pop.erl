@@ -36,6 +36,8 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0, peers_for_query/2, all_peers/0]).
+-export([ban/2, unban/1, set_trust/2]).
+-export([credit/1, penalize/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% Maximum number of peers this node maintains.
@@ -82,6 +84,51 @@ peers_for_query(QueryVec, K) ->
 all_peers() ->
     gen_server:call(?MODULE, all_peers, 5_000).
 
+%%--------------------------------------------------------------------
+%% @doc Ban a peer: evict it immediately and persist the ban.
+%%
+%% Returns `{error, degraded}' when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec ban(binary(), binary()) -> ok | {error, degraded}.
+ban(PeerId, Reason) -> gen_server:call(?MODULE, {ban, PeerId, Reason}, 5_000).
+
+%%--------------------------------------------------------------------
+%% @doc Lift a ban on PeerId.
+%%
+%% Returns `{error, degraded}' when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec unban(binary()) -> ok | {error, degraded}.
+unban(PeerId) -> gen_server:call(?MODULE, {unban, PeerId}, 5_000).
+
+%%--------------------------------------------------------------------
+%% @doc Force-set the trust score of a peer.
+%%
+%% Returns `{error, degraded}' when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec set_trust(binary(), float()) -> ok | {error, degraded}.
+set_trust(PeerId, Trust) -> gen_server:call(?MODULE, {set_trust, PeerId, Trust}, 5_000).
+
+%%--------------------------------------------------------------------
+%% @doc Asynchronously raise PeerId's trust after a good query response.
+%%
+%% No-op (silently degraded) when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec credit(binary()) -> ok.
+credit(PeerId) -> gen_server:cast(?MODULE, {credit, PeerId}).
+
+%%--------------------------------------------------------------------
+%% @doc Asynchronously lower PeerId's trust after a failed query.
+%%
+%% No-op (silently degraded) when em_pop_node failed to start.
+%% @end
+%%--------------------------------------------------------------------
+-spec penalize(binary()) -> ok.
+penalize(PeerId) -> gen_server:cast(?MODULE, {penalize, PeerId}).
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -91,11 +138,15 @@ init(Opts) ->
     Port  = maps:get(pop_port, Opts, queen:emquest_pop_port()),
     Vec   = em_filter_vec:from_capabilities(?EMQUEST_CAPS),
     Seeds = maps:get(seeds, Opts, queen:pop_seeds()),
+    StateFile = maps:get(state_file, Opts,
+                         filename:join(emquest_data_dir(), "em_pop_store.dets")),
     NodeOpts = #{port            => Port,
                  vector          => Vec,
+                 seeds           => Seeds,
                  max_peers       => ?MAX_PEERS,
                  gossip_interval => 5_000,
-                 stale_timeout   => 300_000},  %% 5 min: full round with 30 peers at 5s/peer = 150s
+                 stale_timeout   => 300_000,   %% 5 min: full round with 30 peers at 5s/peer = 150s
+                 state_file      => StateFile},
     case em_pop_node:start_link(NodeOpts) of
         {ok, NodePid} ->
             lists:foreach(fun({H, P}) ->
@@ -132,8 +183,28 @@ handle_call(all_peers, _From, #{node := Node} = State) ->
     Candidates = em_pop_node:peers_for(Node, Vec, ?MAX_PEERS),
     {reply, [P || {P, _Score} <- Candidates], State};
 
+handle_call({ban, _, _}, _From, #{node := undefined} = State) ->
+    {reply, {error, degraded}, State};
+handle_call({ban, PeerId, Reason}, _From, #{node := Node} = State) ->
+    {reply, em_pop_node:ban(Node, PeerId, Reason), State};
+
+handle_call({unban, _}, _From, #{node := undefined} = State) ->
+    {reply, {error, degraded}, State};
+handle_call({unban, PeerId}, _From, #{node := Node} = State) ->
+    {reply, em_pop_node:unban(Node, PeerId), State};
+
+handle_call({set_trust, _, _}, _From, #{node := undefined} = State) ->
+    {reply, {error, degraded}, State};
+handle_call({set_trust, PeerId, Trust}, _From, #{node := Node} = State) ->
+    {reply, em_pop_node:set_trust(Node, PeerId, Trust), State};
+
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
+
+handle_cast({credit, Id}, #{node := Node} = S) when is_pid(Node) ->
+    em_pop_node:credit(Node, Id), {noreply, S};
+handle_cast({penalize, Id}, #{node := Node} = S) when is_pid(Node) ->
+    em_pop_node:penalize(Node, Id), {noreply, S};
 
 handle_cast(_Msg, State) -> {noreply, State}.
 handle_info(_Msg, State) -> {noreply, State}.
@@ -143,6 +214,13 @@ terminate(_Reason, _State) -> ok.
 %%====================================================================
 %% Internal
 %%====================================================================
+
+%% @private Directory for Emquest persistent state (override with EM_POP_STATE_DIR).
+emquest_data_dir() ->
+    case os:getenv("EM_POP_STATE_DIR") of
+        false -> filename:join(code:priv_dir(emquest), "state");
+        Dir   -> Dir
+    end.
 
 %% @private
 %% @doc Deduplicate a scored peer list by {host, query_port}.

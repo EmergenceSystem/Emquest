@@ -1,0 +1,14 @@
+[Unit]
+Description=Emergence local STT (whisper.cpp)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/whisper.cpp
+ExecStart=/home/ubuntu/whisper.cpp/build/bin/whisper-server -m /home/ubuntu/whisper.cpp/models/ggml-base-q5_1.bin -l auto -t 4 -nf --host 127.0.0.1 --port 8086
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

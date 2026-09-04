@@ -9,18 +9,20 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        /* ── Drift-specific overrides ──────────────────────────────── */
+        /* ── Drift-specific overrides (Terminal Glass — tokens inherited
+           from style.css: --bg, --neon, --text, --muted, --glass,
+           --glass-brd, plus the legacy aliases used below) ──────────── */
         .drift-header {
             position: sticky; top: 0; z-index: 200;
-            background: rgba(6,10,8,0.94);
+            background: rgba(2, 10, 7, 0.82);
             border-bottom: 1px solid var(--border);
-            backdrop-filter: blur(18px);
+            backdrop-filter: blur(18px) saturate(1.3);
             padding: 0 2rem;
             height: 56px;
             display: flex; align-items: center; justify-content: space-between;
-            transition: box-shadow 0.3s var(--ease);
+            transition: box-shadow 0.3s var(--ease), background 0.3s var(--ease);
         }
-        .drift-header.scrolled { box-shadow: 0 4px 40px rgba(0,220,100,0.05); }
+        .drift-header.scrolled { background: rgba(0, 20, 14, 0.9); box-shadow: 0 4px 40px rgba(0, 255, 160, 0.08); }
 
         .drift-logo {
             display: flex; align-items: center; gap: 0.6rem;
@@ -43,6 +45,7 @@
             background: var(--surface); border: 1px solid var(--border);
             border-radius: 20px; padding: 0.25rem 0.8rem;
             cursor: pointer; user-select: none;
+            backdrop-filter: blur(8px);
             transition: color 0.15s, border-color 0.15s, background 0.15s;
         }
         .topic-chip:hover,
@@ -79,14 +82,16 @@
             border-radius: 10px;
             padding: 1.1rem 1.25rem;
             cursor: pointer;
+            backdrop-filter: blur(14px) saturate(1.2);
             opacity: 0; transform: translateY(10px);
             animation: cardIn 0.3s var(--ease) forwards;
-            transition: border-color 0.2s, background 0.2s;
+            transition: border-color 0.2s var(--ease), background 0.2s var(--ease), box-shadow 0.2s var(--ease);
             margin-bottom: 0.6rem;
         }
         .drift-card:hover {
             border-color: var(--border-hi);
             background: var(--surface-2);
+            box-shadow: 0 20px 44px -24px rgba(0, 255, 160, 0.4);
         }
         .drift-card.active-topic-0 { border-left-color: var(--green); }
         .drift-card.active-topic-1 { border-left-color: var(--blue); }
@@ -154,7 +159,7 @@
             border-radius: 6px; color: var(--muted);
             font-size: 0.8rem; cursor: pointer;
             align-items: center; justify-content: center;
-            transition: color 0.15s, border-color 0.15s, background 0.15s;
+            transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
             flex-shrink: 0;
         }
         .drift-card { position: relative; }
@@ -185,14 +190,74 @@
         /* ── Footer ──────────────────────────────────────────────── */
         .app-footer {
             position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
-            background: rgba(6,10,8,0.92); border-top: 1px solid var(--border);
+            background: rgba(0, 14, 10, 0.82); border-top: 1px solid var(--border);
             padding: 0 2rem; height: 36px;
             display: flex; align-items: center; gap: 0.75rem;
             font-size: 0.68rem; color: var(--muted);
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(14px) saturate(1.2);
         }
         .footer-name { font-weight: 600; letter-spacing: 0.12em; }
         .footer-sep  { opacity: 0.4; }
+
+        /* ── Theme management (chips + add panel) ─────────────────── */
+        .topic-chip { display: inline-flex; align-items: center; gap: 4px; }
+        .chip-label { cursor: pointer; }
+        .chip-x {
+            background: none; border: none; color: var(--muted);
+            font-size: 0.9rem; line-height: 1; padding: 0 1px; cursor: pointer;
+            opacity: 0; transition: opacity 0.15s, color 0.15s;
+        }
+        .topic-chip:hover .chip-x { opacity: 0.65; }
+        .chip-x:hover { color: rgba(245,75,75,0.95); opacity: 1; }
+        .topic-add {
+            flex-shrink: 0; font-family: var(--font-mono); font-size: 0.85rem;
+            color: var(--muted); background: var(--surface);
+            border: 1px dashed var(--border-hi); border-radius: 20px;
+            width: 24px; height: 24px; line-height: 1; cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .topic-add:hover { color: var(--green); border-color: var(--green); }
+        .topic-panel {
+            position: fixed; z-index: 300; width: 280px;
+            background: rgba(0, 24, 17, 0.92); border: 1px solid var(--border-hi);
+            border-radius: 10px; padding: 0.8rem;
+            backdrop-filter: blur(20px) saturate(1.2);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.45);
+            display: flex; flex-direction: column; gap: 0.6rem;
+        }
+        .topic-panel-input {
+            width: 100%; box-sizing: border-box;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 6px; padding: 0.4rem 0.6rem;
+            color: var(--text-primary); font-family: var(--font-mono); font-size: 0.8rem;
+        }
+        .topic-panel-input:focus { outline: none; border-color: var(--green); }
+        .topic-suggest { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .suggest-chip {
+            font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 14px; padding: 0.2rem 0.6rem; cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .suggest-chip:hover { color: var(--green); border-color: var(--border-hi); }
+
+        /* ── Media-type filter bar ────────────────────────────────── */
+        .drift-typebar {
+            position: sticky; top: 56px; z-index: 150;
+            background: rgba(2, 10, 7, 0.78);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(14px) saturate(1.2);
+            display: flex; gap: 16px; align-items: center;
+            padding: 8px 2rem; font-size: 0.7rem; letter-spacing: 0.05em;
+        }
+        .drift-typebar label {
+            display: inline-flex; align-items: center; gap: 6px;
+            color: var(--muted); cursor: pointer; text-transform: uppercase;
+            user-select: none; transition: color 0.15s;
+        }
+        .drift-typebar label:hover { color: rgba(0,255,160,0.85); }
+        .drift-typebar input { accent-color: var(--green); cursor: pointer; }
+        .drift-card.type-hidden { display: none !important; }
     </style>
 </head>
 <body>
@@ -208,6 +273,14 @@
             <span id="clock" class="drift-clock"></span>
         </div>
     </header>
+
+    <div class="drift-typebar" id="drift-typebar">
+        <label><input type="checkbox" value="text" checked> text</label>
+        <label><input type="checkbox" value="image" checked> image</label>
+        <label><input type="checkbox" value="audio" checked> audio</label>
+        <label><input type="checkbox" value="video" checked> video</label>
+                    <label><input type="checkbox" value="document" checked> document</label>
+    </div>
 
     <main class="drift-feed" id="drift-feed"></main>
 
@@ -225,6 +298,6 @@
         <span id="footer-count" class="footer-info">0 items</span>
     </footer>
 
-    <script src="/static/drift.js"></script>
+    <script src="/static/drift.js?v=8"></script>
 </body>
 </html>

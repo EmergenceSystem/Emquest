@@ -15,6 +15,12 @@
 %%% GET  /preview         → emquest_handler (URL description proxy)
 %%% GET  /network         → emquest_handler (serves network.html)
 %%% GET  /network/peers   → emquest_handler (JSON peer list)
+%%% GET  /admin            → emquest_handler (admin shell page)
+%%% GET  /admin/me          → emquest_handler (gated: authenticated admin's name)
+%%% GET  /admin/peers      → emquest_handler (gated JSON peer list)
+%%% POST /admin/ban        → emquest_handler (gated: ban a peer)
+%%% POST /admin/unban      → emquest_handler (gated: unban a peer)
+%%% POST /admin/trust      → emquest_handler (gated: set peer trust)
 %%% GET  /favicon.ico     → cowboy_static   (priv/static/favicon.ico)
 %%% GET  /static/[...]    → cowboy_static   (priv/static/)
 %%% '''
@@ -52,6 +58,8 @@ start_link() ->
 %% @end
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
+    emquest_ratelimit:init(),
+    _ = timer:apply_interval(3600000, emquest_ratelimit, sweep, [3600]),
     case http_enabled() of
         true ->
             Port     = get_port(),
@@ -65,13 +73,32 @@ init([]) ->
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
                     {"/network/peers",  emquest_handler, network_peers},
+                    {"/health",         emquest_handler, health},
+                    {"/status",         emquest_handler, status},
+                    {"/stt",            emquest_handler, stt},
+                    {"/admin",          emquest_handler, admin_index},
+                    {"/admin/me",       emquest_handler, admin_me},
+                    {"/admin/nav",      emquest_handler, admin_nav},
+                    {"/admin/peers",    emquest_handler, admin_peers},
+                    {"/admin/ban",      emquest_handler, admin_ban},
+                    {"/admin/unban",    emquest_handler, admin_unban},
+                    {"/admin/trust",    emquest_handler, admin_trust},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}
             ]),
+            %% `idle_timeout' raised from cowboy's 60s default: `/query'
+            %% holds the connection open (no bytes sent) while the
+            %% `rerank' phase's `agent_judge' waits on ollama to score
+            %% the top-N items — on a small local model (CPU inference)
+            %% that can take tens of seconds (see `agent_judge:judge_timeout/2').
+            %% Judge/Planner/Router each still fall back on their own
+            %% bounded timeout well under this; this only keeps the
+            %% *connection* alive long enough for that fallback to
+            %% reach the client instead of the socket being cut first.
             {ok, _} = cowboy:start_clear(emquest_listener,
                 [{port, Port}],
-                #{env => #{dispatch => Dispatch}}
+                #{env => #{dispatch => Dispatch}, idle_timeout => 120000}
             ),
             io:format("[emquest] HTTP listening on http://localhost:~p~n", [Port]),
             io:format("[emquest] Shell: emquest_cli:query(\"...\").~n");
@@ -87,8 +114,24 @@ init([]) ->
         type     => worker,
         modules  => [emquest_pop]
     },
+    LibrarianChild = #{
+        id       => em_librarian,
+        start    => {em_librarian, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [em_librarian]
+    },
+    HealthChild = #{
+        id       => emquest_health,
+        start    => {emquest_health, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [emquest_health]
+    },
     {ok, {#{strategy => one_for_one, intensity => 5, period => 10},
-          [PopChild]}}.
+          [PopChild, LibrarianChild, HealthChild]}}.
 
 %%====================================================================
 %% Internal

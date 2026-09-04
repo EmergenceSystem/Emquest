@@ -64,6 +64,12 @@
          pop_seeds/0, emquest_pop_port/0,
          conf_path/0, parse_conf/1]).
 
+%% Exposed for reuse by the Planner/Judge meta-agents (`agent_planner',
+%% `agent_judge'), which need the same bounded ollama call plumbing
+%% `expand/1' and `rank/2' use internally, without duplicating it.
+-export([read_llm_conf/0, handler_conf/3, llm_timeout/1,
+         call_handler/3, call_handler_timeout/4]).
+
 -define(DEFAULT_SYSTEM_PROMPT,
     "You are a search assistant. Be concise and precise.").
 
@@ -88,27 +94,87 @@
 %% optional LLM capabilities available to external clients.
 %% @end
 -spec expand(binary()) -> [binary()].
-expand(Query) when byte_size(Query) < 25 ->
-    [Query];
+%% Query expansion is HF/local only (no LLM). The old LLM path asked
+%% ollama for sub-queries per query, and `call_handler_timeout/4' kills
+%% only the Erlang waiter on timeout -- ollama keeps generating the
+%% killed request server-side, starving this CPU-bound VM (slowing the
+%% hf rerank and every concurrent query). `agent_planner' is the opt-in
+%% LLM expansion slot when that trade-off is wanted.
 expand(Query) ->
-    Conf   = read_llm_conf(),
-    Prompt = <<"Extract 2 to 3 simple search keywords or sub-queries from "
-               "this query. Reply ONLY with a raw JSON array of strings, "
-               "no markdown, no explanation.\n"
-               "Example: [\"term one\", \"term two\"]\n\n"
-               "Query: ", Query/binary>>,
-    HandlerConf = handler_conf(
-        maps:get(provider, Conf, <<"mistral">>),
-        Conf,
-        <<"You extract search keywords. Reply only with a JSON array of strings.">>
-    ),
-    SubQueries = case call_handler(maps:get(provider, Conf, <<"mistral">>),
-                                   Prompt, HandlerConf) of
-        {ok, Text} -> parse_json_list(Text);
-        _          -> []
-    end,
-    Deduped = lists:usort(SubQueries),
-    [Query | lists:delete(Query, Deduped)].
+    [Query | [K || K <- fallback_topics(Query), K =/= Query]].
+
+%% @private Run an LLM handler with a hard timeout so a slow or unavailable
+%% provider (e.g. ollama down) falls back to topic extraction instead of
+%% hanging the request. Returns {error, timeout} past the deadline.
+-spec call_handler_timeout(binary(), binary(), map(), pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+call_handler_timeout(Provider, Prompt, Conf, TimeoutMs) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, MRef} = spawn_monitor(fun() ->
+        Parent ! {Ref, (catch call_handler(Provider, Prompt, Conf))}
+    end),
+    receive
+        {Ref, Res} -> erlang:demonitor(MRef, [flush]), Res;
+        {'DOWN', MRef, _, _, Reason} -> {error, Reason}
+    after TimeoutMs ->
+        exit(Pid, kill), erlang:demonitor(MRef, [flush]), {error, timeout}
+    end.
+
+%% @private LLM call timeout in ms from [llm] timeout_ms (default 4000).
+-spec llm_timeout(map()) -> pos_integer().
+llm_timeout(Conf) ->
+    case maps:get(timeout_ms, Conf, undefined) of
+        undefined            -> 4000;
+        B when is_binary(B)  -> try binary_to_integer(B) catch _:_ -> 4000 end;
+        N when is_integer(N), N > 0 -> N;
+        _                    -> 4000
+    end.
+
+%% @private Local keyword fallback (no LLM): split a phrase into topic
+%% words, dropping short tokens and common FR/EN stopwords.
+-spec local_keywords(binary()) -> [binary()].
+local_keywords(Query) ->
+    Parts = binary:split(Query,
+        [<<" ">>,<<",">>,<<".">>,<<";">>,<<":">>,<<"?">>,<<"!">>,
+         <<"(">>,<<")">>,<<"/">>,<<"-">>],
+        [global, trim_all]),
+    Kw = [string:lowercase(P) || P <- Parts, byte_size(P) >= 3],
+    Kw2 = [K || K <- Kw, not lists:member(K, stopwords())],
+    lists:sublist(lists:usort(Kw2), 6).
+
+-spec stopwords() -> [binary()].
+stopwords() ->
+    [<<"les">>,<<"des">>,<<"une">>,<<"que">>,<<"qui">>,<<"pour">>,
+     <<"avec">>,<<"dans">>,<<"sur">>,<<"est">>,<<"aux">>,<<"ces">>,
+     <<"son">>,<<"ses">>,<<"nos">>,<<"vos">>,<<"leur">>,<<"the">>,
+     <<"and">>,<<"for">>,<<"with">>,<<"from">>,<<"this">>,<<"that">>,
+     <<"are">>,<<"was">>,<<"you">>,<<"your">>].
+
+%% @private Query the local HF topic-extraction microservice (KeyBERT +
+%% multilingual MiniLM). Returns [] on any error so callers fall back.
+-spec hf_topics(binary()) -> [binary()].
+hf_topics(Query) ->
+    _ = application:ensure_all_started(inets),
+    Body = iolist_to_binary(json:encode(#{<<"query">> => Query})),
+    Req  = {"http://127.0.0.1:8085/topics", [], "application/json", Body},
+    case httpc:request(post, Req, [{timeout, 4000}], [{body_format, binary}]) of
+        {ok, {{_, 200, _}, _, RespBin}} ->
+            case catch json:decode(RespBin) of
+                #{<<"topics">> := Ts} when is_list(Ts) ->
+                    [T || T <- Ts, is_binary(T), T =/= <<>>];
+                _ -> []
+            end;
+        _ -> []
+    end.
+
+%% @private HF topics first, local keyword split as fallback.
+-spec fallback_topics(binary()) -> [binary()].
+fallback_topics(Query) ->
+    case hf_topics(Query) of
+        []  -> local_keywords(Query);
+        Ts  -> Ts
+    end.
 
 %%====================================================================
 %% Synthesis
@@ -266,14 +332,25 @@ disco_nodes() ->
 -spec pop_seeds() -> [{string(), pos_integer()}].
 pop_seeds() ->
     DiscoConf = read_disco_conf(),
-    case maps:get("pop_port", DiscoConf, undefined) of
-        undefined ->
-            [];
-        PortStr ->
-            PopPort = list_to_integer(string:trim(PortStr)),
-            Hosts   = extract_disco_hosts(DiscoConf),
-            [{H, PopPort} || H <- Hosts]
-    end.
+    Default = case maps:get("pop_port", DiscoConf, undefined) of
+                  undefined -> 9100;
+                  PortStr   -> list_to_integer(string:trim(PortStr))
+              end,
+    NodesStr = maps:get("nodes", DiscoConf,
+                   maps:get("host", DiscoConf, "localhost")),
+    Entries = string:split(NodesStr, ",", all),
+    lists:filtermap(fun(E) ->
+        case string:trim(E) of
+            "" -> false;
+            T  ->
+                case string:split(T, ":", trailing) of
+                    [H, P] ->
+                        try {true, {string:trim(H), list_to_integer(string:trim(P))}}
+                        catch _:_ -> {true, {string:trim(T), Default}} end;
+                    [H] -> {true, {string:trim(H), Default}}
+                end
+        end
+    end, Entries).
 
 %%--------------------------------------------------------------------
 %% @doc Return the em_pop listener port for the Emquest node.
@@ -451,6 +528,7 @@ handler_conf(Provider, Conf, SysPrompt) ->
         _             -> mistral_handler:get_env_config()
     end,
     Overrides = maps:filter(fun(_, V) -> V =/= undefined end, #{
+        endpoint      => maps:get(endpoint,    Conf, undefined),
         model         => maps:get(model,       Conf, undefined),
         temperature   => maps:get(temperature, Conf, undefined),
         system_prompt => ensure_binary(SysPrompt)
