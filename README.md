@@ -4,6 +4,8 @@ Emquest is the web gateway of the [Emergence](https://github.com/EmergenceSystem
 distributed discovery network — a streaming, multi-agent search interface built on
 [em_filter](https://hex.pm/packages/em_filter)'s em-pop gossip protocol.
 
+![Screenshot 1](https://github.com/EmergenceSystem/Emquest/blob/main/emquest.png)
+
 ---
 
 ## Philosophy
