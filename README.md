@@ -6,6 +6,8 @@ distributed discovery network — a streaming, multi-agent search interface buil
 
 ![Screenshot 1](https://github.com/EmergenceSystem/Emquest/blob/main/emquest.png)
 
+> **New here?** Start with the [Getting Started guide](GETTING_STARTED.md) — run the network locally and write your first filter agent.
+
 ---
 
 ## Philosophy
