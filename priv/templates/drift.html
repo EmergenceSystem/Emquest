@@ -119,6 +119,12 @@
             margin-bottom: 0.5rem; opacity: 0.85;
         }
 
+        /* clamp media (audio/video) descriptions so their cards match
+           text/image card height instead of ballooning to full description */
+        .drift-card--media .item-resume {
+            display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
         .card-preview {
             font-family: var(--font-sans); font-size: 0.85rem;
             line-height: 1.6; color: var(--text-secondary);
