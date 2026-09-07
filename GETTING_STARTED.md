@@ -119,9 +119,12 @@ Every SDK supports both transports; pick with `EM_FILTER_MODE`:
   address. Requires an inbound port Emquest can reach (good for servers). This is
   what the Erlang `em_filter` agents use.
 
-To join a **local** disco, point `EM_DISCO_HOST` at `localhost`. Joining the
-public network uses the public disco's relay endpoint once its operator has
-exposed it.
+Point `EM_DISCO_HOST` at `localhost` for a local disco, or at
+**`disco.roques.me`** to join the **live public network** — your filter connects
+outbound over `wss://disco.roques.me/ws/filter`, is discovered through gossip, and
+Emquest verifies its signed results. For example, with the Python SDK:
+
+    EM_FILTER_MODE=relay EM_DISCO_HOST=disco.roques.me python examples/echo_filter.py
 
 ## 3. Identity & trust
 
