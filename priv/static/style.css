@@ -888,3 +888,17 @@ mark { background: rgba(0, 255, 160, 0.22); color: #eafff3; padding: 0 2px; bord
 .doc-open { color: var(--neon); font-size: 13px; text-decoration: none; }
 .doc-open:hover { text-decoration: underline; }
 .item-card--doc .item-title::after { content: " 📄"; font-size: 0.9em; opacity: 0.7; }
+
+
+/* ── Report (moderation flag) button ─────────────────────────────── */
+.report-btn {
+    position: absolute; bottom: 0.5rem; right: 0.6rem;
+    background: transparent; border: none; padding: 2px 5px;
+    color: var(--muted); font-size: 0.85rem; line-height: 1; cursor: pointer;
+    opacity: 0; transition: opacity 0.15s, color 0.15s;
+}
+.drift-card:hover .report-btn, .item-card:hover .report-btn { opacity: 0.5; }
+.report-btn:hover { opacity: 1; color: rgba(245, 75, 75, 0.9); }
+.report-btn.reported { opacity: 0.85; color: rgba(245, 75, 75, 0.8); font-size: 0.62rem; }
+
+.item-card { position: relative; }

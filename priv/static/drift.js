@@ -456,6 +456,24 @@ function initAudioPlayer(root) {
   if (dl) dl.addEventListener('click', e => e.stopPropagation());
 }
 
+function reportResult(item, btn) {
+    if (!item || !item.source_id) return;
+    try {
+        fetch("/report", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ signer_id: item.source_id, url: item.url || "", reason: "user_flag" }) });
+    } catch (e) {}
+    if (btn) { btn.textContent = "⚑ reported"; btn.disabled = true; btn.classList.add("reported"); }
+}
+
+function addReportBtn(card, item) {
+    if (!item || !item.source_id) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "report-btn"; b.textContent = "⚑";
+    b.title = "Report this result"; b.setAttribute("aria-label", "Report this result");
+    b.addEventListener("click", e => { e.stopPropagation(); reportResult(item, b); });
+    card.appendChild(b);
+}
+
 function appendCard(item, topicIndex) {
     const feed = document.getElementById('drift-feed');
     if (!feed) return;
@@ -506,6 +524,7 @@ function appendCard(item, topicIndex) {
                 if (u) window.open(u, '_blank', 'noopener');
             });
         }
+        addReportBtn(card, item);
         feed.appendChild(card);
         totalItems++;
         updateFooter();
@@ -540,6 +559,7 @@ function appendCard(item, topicIndex) {
         lastTap = now;
     }, { passive: false });
 
+    addReportBtn(card, item);
     feed.appendChild(card);
     totalItems++;
     updateFooter();

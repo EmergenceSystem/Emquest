@@ -230,6 +230,7 @@ async function loadPeers() {
         const peers = await r.json();
         renderPeers(peers);
         setStatus(peers.length + ' peer' + (peers.length !== 1 ? 's' : ''), 'ok');
+        loadReports();
     } catch (err) {
         setStatus(err.message, 'err');
     }
@@ -250,6 +251,7 @@ async function submitToken() {
     await idbSet(token);
     showGreeting(name);
     await loadPeers();
+    await loadReports();
 }
 
 async function doLogout() {
@@ -259,6 +261,7 @@ async function doLogout() {
     if (tokenInput) tokenInput.value = '';
     showLoginRow();
     renderPeers([]);
+    renderReports([]);
     setStatus('');
 }
 
@@ -289,3 +292,34 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', () => { init(); });
+
+
+function renderReports(reports) {
+    const tb = document.getElementById("report-rows");
+    if (!tb) return;
+    if (!reports || !reports.length) {
+        tb.innerHTML = "<tr><td colspan=\"3\" class=\"empty\">No reports.</td></tr>";
+        return;
+    }
+    tb.innerHTML = "";
+    reports.forEach(function (r) {
+        const tr = document.createElement("tr");
+        const c1 = document.createElement("td"); c1.className = "mono"; c1.textContent = r.signer_id || "";
+        const c2 = document.createElement("td"); c2.textContent = r.count;
+        const samples = (r.samples || []).slice(0, 3)
+            .map(function (x) { return x.url || x.reason || ""; })
+            .filter(Boolean).join(", ");
+        const c3 = document.createElement("td"); c3.textContent = samples;
+        tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3);
+        tb.appendChild(tr);
+    });
+}
+
+async function loadReports() {
+    if (!currentToken) return;
+    try {
+        const r = await fetch("/admin/reports", { headers: { "Authorization": "Bearer " + currentToken } });
+        if (!r.ok) { renderReports([]); return; }
+        renderReports(await r.json());
+    } catch (e) { renderReports([]); }
+}
