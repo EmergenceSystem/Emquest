@@ -810,7 +810,9 @@ normalise_item(Item) ->
     Ips   = first_defined(Props, [<<"ips">>],                      null),
     Base0 = #{<<"label">> => cap(Label, 256),
               <<"value">> => cap(Value, 2048),
-              <<"score">> => Score, <<"type">>  => Type},
+              <<"score">> => Score, <<"type">>  => Type,
+              <<"source_id">> => maps:get(<<"__source_id">>, Item, null),
+              <<"source">>    => maps:get(<<"__source">>,    Item, null)},
     Base1 = add_media(Base0, Props),
     Base  = case maps:get(<<"doc_type">>, Props, undefined) of
                 D when is_binary(D), byte_size(D) > 0 -> Base1#{<<"doc_type">> => D};
@@ -1088,6 +1090,7 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
     [spawn(fun() ->
         Trust = maps:get(trust, PeerMap, ?TRUST_INIT),
         Id    = maps:get(id, PeerMap, undefined),
+        Name  = maps:get(name, PeerMap, <<>>),
         {Tag, FetchResult} = dispatch_pop_worker(Q, PeerMap),
         case FetchResult of
             {ok, Items} ->
@@ -1095,7 +1098,7 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
                     [_|_] when is_binary(Id) -> catch emquest_pop:credit(Id);
                     _ -> ok
                 end,
-                Parent ! {disco_result, self(), Tag, Q, Items, Trust};
+                Parent ! {disco_result, self(), Tag, Q, stamp_source(Items, Id, Name), Trust};
             {error, R} ->
                 (is_binary(Id) andalso catch emquest_pop:penalize(Id)),
                 logger:warning("[emquest] pop agent fail ~s: ~p", [Tag, R]),
@@ -1103,6 +1106,17 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
         end
     end)
     || Q <- SubQueries, {PeerMap, _Score} <- Peers].
+
+%% @private Stamp each result with its source filter id (base64) + name, so
+%% the browser can attribute and report it. Non-map items and unbound-id
+%% sources pass through untouched.
+stamp_source(Items, Id, Name) when is_binary(Id) ->
+    Sid = base64:encode(Id),
+    [case I of
+         M when is_map(M) -> M#{<<"__source_id">> => Sid, <<"__source">> => Name};
+         _ -> I
+     end || I <- Items];
+stamp_source(Items, _Id, _Name) -> Items.
 
 %% @private
 %% @doc Build the `{Tag, FetchResult}' pair for one (sub-query, peer)
