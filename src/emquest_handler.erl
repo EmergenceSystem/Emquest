@@ -49,7 +49,7 @@
 
 -export([init/2, fetch_from_agent/2, fetch_from_disco/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
          security_headers/1, security_headers/2, internal_exposed/0,
-         client_ip/1, response_ok/2, fetch_via_relay/3]).
+         client_ip/1, response_ok/2, fetch_via_relay/3, cap_items/1]).
 -export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
@@ -954,10 +954,19 @@ parse_agent_response(RespBody) ->
             false -> []
         end,
         case response_ok(RespMap, Items) of
-            true  -> {ok, Items};
+            true  -> {ok, cap_items(Items)};
             false -> {error, bad_signature}
         end
     catch _:_ -> {error, invalid_response} end.
+
+%% @doc Cap items accepted from one filter response (anti-flood from an
+%% untrusted 3rd-party filter). Applied AFTER signature verification so it
+%% never invalidates a signature over the full list. Config
+%% `emquest, filter_max_items` (default 200).
+-spec cap_items([map()]) -> [map()].
+cap_items(Items) ->
+    Max = application:get_env(emquest, filter_max_items, 200),
+    lists:sublist(Items, Max).
 
 %% @doc `emquest, relay_hub_http_port' — the em_disco hub's Cowboy HTTP
 %% listener port that serves `/relay/query' (default 9080, matching

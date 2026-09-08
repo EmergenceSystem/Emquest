@@ -144,7 +144,12 @@ safe_post(Url, Headers, ContentType, Body, HttpOpts) ->
                                {binary_to_list(Url), Headers, ContentType, Body},
                                [{autoredirect, false} | HttpOpts],
                                [{body_format, binary}]) of
-                {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
+                {ok, {{_, 200, _}, _, Bytes}} ->
+                    Max = application:get_env(emquest, filter_max_response_bytes, 2000000),
+                    case byte_size(Bytes) =< Max of
+                        true  -> {ok, Bytes};
+                        false -> {error, response_too_large}
+                    end;
                 {ok, {{_, C,   _}, _, _}}     -> {error, {http, C}};
                 {error, R}                    -> {error, R}
             end;
