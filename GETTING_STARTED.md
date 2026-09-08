@@ -142,6 +142,12 @@ Discovery is not authorization — a rogue node can *find* the network but not b
   bannable, and bans are root-signed and propagate across the mesh.
 - **Gossip admission** — a non-root hub cannot inject peers pointing at private/
   loopback/metadata hosts, and cannot flood peers (per-source cap).
+- **Query privacy** — a filter receives only the query text, never the
+  viewer's IP or identity: Emquest does not forward the client address to
+  filters. Result payloads are also size- and count-capped per filter.
+- **Report & moderate** — viewers can flag a bad result (each result carries
+  its source filter id); flags surface in the operator console for a ban
+  decision.
 
 ## Components
 
