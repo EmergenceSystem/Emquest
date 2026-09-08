@@ -23,3 +23,16 @@ normalise_item_carries_source_test() ->
 normalise_item_source_null_test() ->
     N = emquest_handler:normalise_item(#{<<"label">> => <<"x">>}),
     ?assertEqual(null, maps:get(<<"source_id">>, N)).
+
+reports_count_and_top_test() ->
+    A = <<"aaa_test_sid">>, B = <<"bbb_test_sid">>,
+    emquest_reports:report(A, <<"spam">>, <<"http://x/1">>),
+    emquest_reports:report(A, <<"spam">>, <<"http://x/2">>),
+    emquest_reports:report(B, <<"nsfw">>, <<"http://y/1">>),
+    ?assertEqual(2, maps:get(count, emquest_reports:get(A))),
+    ?assertEqual(1, maps:get(count, emquest_reports:get(B))),
+    Top = emquest_reports:top(10),
+    First = hd([S || #{signer_id := S} = M <- Top, maps:get(count, M) >= 2]),
+    ?assertEqual(A, First),
+    catch dets:delete(emquest_reports, A),
+    catch dets:delete(emquest_reports, B).

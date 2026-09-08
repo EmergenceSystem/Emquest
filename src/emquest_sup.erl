@@ -83,6 +83,8 @@ init([]) ->
                     {"/admin/ban",      emquest_handler, admin_ban},
                     {"/admin/unban",    emquest_handler, admin_unban},
                     {"/admin/trust",    emquest_handler, admin_trust},
+                    {"/admin/reports",  emquest_handler, admin_reports},
+                    {"/report",         emquest_handler, report},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
                     {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
                 ]}

@@ -256,6 +256,38 @@ init(Req0, admin_peers) ->
         _ -> {ok, unauthorized(Req0), admin_peers}
     end;
 
+%% /admin/reports - gated JSON: filters by report count (moderation queue).
+init(Req0, admin_reports) ->
+    case admin_auth(Req0) of
+        {ok, _Name} ->
+            Top = try emquest_reports:top(100) catch _:_ -> [] end,
+            {ok, cowboy_req:reply(200,
+                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
+                iolist_to_binary(json:encode(Top)), Req0), admin_reports};
+        _ -> {ok, unauthorized(Req0), admin_reports}
+    end;
+
+%% /report - public: a viewer flags a bad result from a filter. Rate-limited.
+init(Req0, report) ->
+    case emquest_ratelimit:allow(client_ip(Req0), 20, 60) of
+        false -> {ok, cowboy_req:reply(429, #{}, <<"rate limited">>, Req0), report};
+        true ->
+            {ok, Body, Req1} = cowboy_req:read_body(Req0),
+            case (catch json:decode(Body)) of
+                #{<<"signer_id">> := Sid} = M when is_binary(Sid) ->
+                    Reason = maps:get(<<"reason">>, M, <<>>),
+                    Url    = maps:get(<<"url">>, M, <<>>),
+                    catch emquest_reports:report(Sid, Reason, Url),
+                    {ok, cowboy_req:reply(200,
+                        #{<<"content-type">> => <<"application/json">>},
+                        <<"{\"ok\":true}">>, Req1), report};
+                _ ->
+                    {ok, cowboy_req:reply(400,
+                        #{<<"content-type">> => <<"application/json">>},
+                        <<"{\"error\":\"signer_id required\"}">>, Req1), report}
+            end
+    end;
+
 init(Req0, admin_ban)   -> admin_action(Req0, ban);
 init(Req0, admin_unban) -> admin_action(Req0, unban);
 init(Req0, admin_trust) -> admin_action(Req0, trust).
