@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Filters — Emergence</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        .filters-wrap { max-width: 980px; margin: 0 auto; padding: 1.5rem 1rem 5rem; }
+        .filters-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
+        .filters-head h1 { font-family: var(--font-mono); font-size: 1.1rem; letter-spacing: 0.04em; margin: 0; }
+        .filters-head h1 .dim { color: var(--muted); }
+        .filters-sub { font-size: 0.8rem; color: var(--muted); max-width: 560px; line-height: 1.5; }
+        #count { font-family: var(--font-mono); font-size: 0.72rem; color: var(--green); white-space: nowrap; }
+        .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.7rem; }
+        .filter-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-left: 3px solid var(--border); border-radius: 10px;
+            padding: 0.85rem 1rem; backdrop-filter: blur(12px) saturate(1.15);
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .filter-card:hover { border-color: var(--border-hi); background: var(--surface-2); }
+        .filter-card.tier-normal   { border-left-color: var(--green); }
+        .filter-card.tier-quarantine { border-left-color: var(--amber); }
+        .filter-card.tier-excluded { border-left-color: rgba(245,75,75,0.6); }
+        .f-name { font-family: var(--font-sans); font-weight: 600; font-size: 0.92rem; color: var(--text-primary); word-break: break-word; }
+        .f-meta { margin-top: 0.35rem; font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.04em; color: var(--muted); text-transform: uppercase; }
+        .f-verified { color: var(--green); }
+        .filters-empty { color: var(--muted); font-size: 0.85rem; padding: 2rem 0; }
+        .filters-nav { margin-top: 2rem; font-size: 0.72rem; font-family: var(--font-mono); }
+        .filters-nav a { color: var(--muted); text-decoration: none; margin-right: 1rem; }
+        .filters-nav a:hover { color: var(--green); }
+    </style>
+</head>
+<body>
+    <div class="filters-wrap">
+        <div class="filters-head">
+            <div>
+                <h1>EMERGENCE <span class="dim">/ filters</span></h1>
+                <p class="filters-sub">Live directory of filter agents on the network. Each is an autonomous agent answering one kind of query. Anyone can add one — see the getting-started guide.</p>
+            </div>
+            <span id="count">…</span>
+        </div>
+        <div class="filter-grid" id="filter-grid"></div>
+        <div class="filters-nav">
+            <a href="/">← search</a>
+            <a href="/drift">drift</a>
+            <a href="https://github.com/EmergenceSystem" target="_blank" rel="noopener">build a filter ↗</a>
+        </div>
+    </div>
+    <script src="/static/filters.js"></script>
+</body>
+</html>

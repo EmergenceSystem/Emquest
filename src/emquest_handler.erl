@@ -105,6 +105,32 @@ init(Req0, network) ->
     end,
     {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), network};
 
+%% /filters - public directory shell (glass). Data from /filters.json.
+init(Req0, filters) ->
+    Path = filename:join([code:priv_dir(emquest), "templates", "filters.html"]),
+    {Code, Body, CT} = case file:read_file(Path) of
+        {ok, Bin} -> {200, Bin, <<"text/html">>};
+        {error, R} ->
+            logger:error("[emquest] filters.html read failed: ~p", [R]),
+            {500, <<"Internal Server Error">>, <<"text/plain">>}
+    end,
+    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), filters};
+
+%% /filters.json - PUBLIC, topology-safe directory of filters (name, tier,
+%% role, verified). No host/port/ip/pubkey/id. Banned peers excluded; deduped
+%% by name.
+init(Req0, filters_json) ->
+    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    Pub   = [filter_public_json(P) || P <- Peers,
+             maps:get(name, P, <<>>) =/= <<>>, not peer_banned(P)],
+    Uniq  = maps:values(lists:foldl(
+              fun(#{<<"name">> := N} = E, A) -> maps:put(N, E, A) end, #{}, Pub)),
+    {ok, cowboy_req:reply(200,
+        #{<<"content-type">> => <<"application/json">>,
+          <<"cache-control">> => <<"max-age=15">>,
+          <<"access-control-allow-origin">> => <<"*">>},
+        iolist_to_binary(json:encode(Uniq)), Req0), filters_json};
+
 init(Req0, network_peers) ->
     %% Topology leak surface — require an admin token (same as /admin).
     case admin_auth(Req0) of
@@ -1442,6 +1468,22 @@ peer_admin_json(P) ->
       <<"root">>      => is_root_pubkey(PkB64),
       <<"role">>      => case Role of undefined -> null; _ -> atom_to_binary(Role, utf8) end,
       <<"last_seen">> => case LS of I when is_integer(I) -> I; _ -> null end}.
+
+%% @private Public, topology-safe projection for the /filters directory.
+filter_public_json(P) ->
+    Trust = maps:get(trust, P, maps:get(<<"trust">>, P, 0.0)),
+    Role  = maps:get(role, P, undefined),
+    #{<<"name">>     => maps:get(name, P, maps:get(<<"name">>, P, <<>>)),
+      <<"tier">>     => trust_tier(Trust),
+      <<"role">>     => case Role of undefined -> null; _ when is_atom(Role) -> atom_to_binary(Role, utf8); _ -> Role end,
+      <<"verified">> => is_binary(maps:get(pubkey, P, undefined))}.
+
+%% @private Is this peer currently banned?
+peer_banned(P) ->
+    case maps:get(id, P, undefined) of
+        Id when is_binary(Id) -> (catch em_pop_store:is_banned(Id)) =:= true;
+        _ -> false
+    end.
 
 %% @private Coarse trust bucket used to colour the admin peer table.
 trust_tier(T) when is_number(T), T < 0.10 -> <<"excluded">>;

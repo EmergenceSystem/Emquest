@@ -70,6 +70,8 @@ init([]) ->
                     {"/media",          emquest_handler, media},
                     {"/media/prepare/:id", emquest_handler, media_prepare},
                     {"/drift",          emquest_handler, drift},
+                    {"/filters",        emquest_handler, filters},
+                    {"/filters.json",   emquest_handler, filters_json},
                     {"/preview",        emquest_handler, preview},
                     {"/network",        emquest_handler, network},
                     {"/network/peers",  emquest_handler, network_peers},
