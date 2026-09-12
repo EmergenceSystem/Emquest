@@ -192,7 +192,7 @@ async function renderSidebar() {
     try { convs = await cGetAll('conversations'); } catch (_) {}
     convs.sort((a, b) => b.updatedAt - a.updatedAt);
     list.innerHTML = convs.length
-        ? convs.map(c => `<div class="conv${c.id === currentConvId ? ' active' : ''}" data-id="${escAttr(c.id)}" title="${escAttr(c.title)}">${escHtml(c.title)}<span class="conv-date">${escHtml(relTime(c.updatedAt))}</span></div>`).join('')
+        ? convs.map(c => `<div class="conv${c.id === currentConvId ? ' active' : ''}" data-id="${escAttr(c.id)}" title="${escAttr(c.title)}">${escHtml(c.title)}<span class="conv-date">${escHtml(relTime(c.updatedAt))}</span><button class="conv-del" data-id="${escAttr(c.id)}" title="Delete this search" aria-label="Delete this search">✕</button></div>`).join('')
         : '<div class="conv-empty">No searches yet.</div>';
     updateMemBar();
 }
@@ -297,9 +297,19 @@ queryInput?.addEventListener('keydown', e => {
 document.getElementById('send-btn')?.addEventListener('click', submitQuery);
 document.getElementById('new-search-btn')?.addEventListener('click', newConversation);
 document.getElementById('conv-list')?.addEventListener('click', e => {
+    const del = e.target.closest('.conv-del');
+    if (del) { e.stopPropagation(); onDeleteConv(del.dataset.id); return; }
     const row = e.target.closest('.conv');
     if (row && row.dataset.id) loadConversation(row.dataset.id);
 });
+
+/* Delete a search — no confirmation. */
+async function onDeleteConv(id) {
+    if (!id) return;
+    try { await deleteConversation(id); } catch (_) {}
+    if (id === currentConvId) { currentConvId = null; clearFlux(); showEmpty(true); }
+    await renderSidebar();
+}
 
 /* ================================================================== */
 /* Submit                                                             */
@@ -828,16 +838,6 @@ function applyTypeFilter() {
         Array.from(tmp.children).forEach(el=>nav.insertBefore(el, clock)); })
       .catch(()=>{});
   });
-})();
-
-/* media-type drawer open/close */
-(function(){
-  const pill=document.getElementById('type-pill'),dr=document.getElementById('type-drawer'),sc=document.getElementById('drawer-scrim');
-  if(!pill||!dr||!sc) return;
-  const open=()=>{dr.classList.add('open');sc.classList.add('open')};
-  const close=()=>{dr.classList.remove('open');sc.classList.remove('open')};
-  pill.addEventListener('click',open); sc.addEventListener('click',close);
-  addEventListener('keydown',e=>{if(e.key==='Escape')close()});
 })();
 
 /* result-card 3D tilt (delegated on the flux; skip touch/reduced-motion) */

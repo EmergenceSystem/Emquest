@@ -1014,8 +1014,26 @@ body { overflow: hidden; min-height: 0; }
 .composer .search-box { border-radius: 14px; }
 .tools-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.55rem; padding: 0 0.2rem; flex-wrap: wrap; }
 .tools-row .add-btn, .tools-row .mic-btn { margin-right: 0; }
-.tools-row .type-pill { margin: 0; }
 .tools-row .meta-status { margin-left: auto; font-size: 0.68rem; color: var(--muted); }
+
+/* Inline media-type filter (row, not the base drawer column) */
+.tools-row .type-filters { flex-direction: row; align-items: center; gap: 10px; margin-left: 0.4rem; }
+.tools-row .type-filters label { padding: 2px 4px; gap: 5px; font-size: 0.66rem; border-radius: 6px; }
+.tools-row .type-filters input { width: 14px; height: 14px; }
+.tools-row .type-filters .tf-count { display: inline; margin: 0 0 0 2px; font-size: 0.66rem; }
+
+/* Delete-a-search button (sidebar row, no confirm) */
+.conv { position: relative; padding-right: 1.7rem; }
+.conv-del {
+    position: absolute; top: 50%; right: 0.35rem; transform: translateY(-50%);
+    width: 18px; height: 18px; padding: 0; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: 5px; cursor: pointer;
+    color: var(--muted); font-size: 0.9rem; opacity: 0;
+    transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+.conv:hover .conv-del { opacity: 0.6; }
+.conv-del:hover { opacity: 1; color: var(--red); background: rgba(245, 75, 75, 0.12); }
 .composer-foot { display: flex; justify-content: center; padding: 0.4rem 0.35rem 0; font-size: 0.64rem; color: var(--muted); }
 
 /* ── Neutralise legacy layout blocks not used by the chat shell ───── */
