@@ -179,7 +179,7 @@ function fmtSize(b) {
 async function createConversation(query) {
     const id = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const now = Date.now();
-    await cPut('conversations', { id, title: truncate(query, 60), createdAt: now, updatedAt: now, bytes: 0, seq: 0 });
+    await cPut('conversations', { id, title: truncate(query, 60), createdAt: now, updatedAt: now, bytes: 0, seq: 0, mediaTypes: getFilterMap() });
     currentConvId = id;
     await renderSidebar();
     return id;
@@ -222,11 +222,13 @@ async function loadConversation(id) {
     const turns = await turnsFor(id);
     for (const rec of turns) renderSavedTurn(rec);
     setActiveConv(id);
+    setFilterMap(conv.mediaTypes);   /* restore this conversation's filter */
     scrollFluxToBottom();
 }
 function newConversation() {
     currentConvId = null;
     clearFlux(); showEmpty(true); setActiveConv(null);
+    restoreMediaTypes();             /* reset filter to the global default */
     document.getElementById('query-input')?.focus();
 }
 
@@ -795,11 +797,33 @@ async function restoreMediaTypes() {
         applyTypeFilter();
     } catch (_) {}
 }
+/* Filter selection as a {type: checked} map, and helpers to read/apply it. */
+function getFilterMap() {
+    const tf = document.getElementById('type-filters');
+    const m = {};
+    tf?.querySelectorAll('input').forEach(c => { m[c.value] = c.checked; });
+    return m;
+}
+function setFilterMap(m) {
+    const tf = document.getElementById('type-filters');
+    if (!tf || !m) return;
+    tf.querySelectorAll('input').forEach(c => { if (m[c.value] !== undefined) c.checked = m[c.value]; });
+}
+/* Persist the current filter choice onto the open conversation, so reopening
+   it restores its own types. New searches start from the global default. */
+async function saveConvFilter() {
+    if (!currentConvId) return;
+    try { const conv = await cGet('conversations', currentConvId); if (conv) { conv.mediaTypes = getFilterMap(); await cPut('conversations', conv); } } catch (_) {}
+}
+
 let _typeFiltersInit = false;
 function initTypeFilters() {
     if (_typeFiltersInit) return;
     const tf = document.getElementById('type-filters');
-    if (tf) { tf.addEventListener('change', () => { applyTypeFilter(); persistMediaTypes(); }); _typeFiltersInit = true; }
+    /* Toggling a checkbox only saves the choice (global default + per-conversation);
+       it never re-filters cards already on screen. The filter is applied once, as
+       results arrive for the current search (see applyTypeFilter in handleEvent). */
+    if (tf) { tf.addEventListener('change', () => { persistMediaTypes(); saveConvFilter(); }); _typeFiltersInit = true; }
 }
 function applyTypeFilter() {
     const tf = document.getElementById('type-filters');
