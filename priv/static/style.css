@@ -94,28 +94,6 @@ body::after {
 /* ================================================================== */
 /* Header                                                             */
 /* ================================================================== */
-.app-header {
-    position: sticky; top: 0; z-index: 200;
-    background: var(--glass);
-    border-bottom: 1px solid var(--glass-brd);
-    backdrop-filter: blur(18px) saturate(1.3);
-    padding: 0.55rem 2rem;
-    min-height: var(--header-h);
-    transition: box-shadow 0.3s var(--ease), background 0.3s var(--ease);
-}
-.app-header.scrolled {
-    background: rgba(0, 20, 14, 0.72);
-    box-shadow: 0 4px 40px rgba(0, 255, 160, 0.08);
-}
-
-.header-inner {
-    position: relative; z-index: 10;
-    max-width: 1200px; margin: 0 auto; height: 100%;
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center; gap: 2rem;
-}
-
 /* Logo */
 .logo { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; user-select: none; font-family: var(--font-mono); }
 .logo-mark { display: flex; flex-direction: column; gap: 3px; }
@@ -131,8 +109,7 @@ body::after {
 .logo-name { font-size: 1rem; font-weight: 600; letter-spacing: 0.22em; color: var(--text); }
 .logo-tag  { font-size: 0.65rem; color: var(--muted); letter-spacing: 0.14em; align-self: flex-end; padding-bottom: 1px; }
 
-/* Search zone */
-.search-zone { min-width: 0; }
+/* Composer search box (used by the bottom composer) */
 .search-box {
     display: flex; align-items: flex-end; gap: 0.5rem;
     background: var(--glass); border: 1px solid var(--glass-brd);
@@ -174,27 +151,6 @@ body::after {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Media-type pill trigger (opens the drawer) */
-.type-pill {
-    display: inline-flex; align-items: center; gap: 8px;
-    margin: 8px 0 0;
-    font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em;
-    color: var(--muted); background: var(--glass); border: 1px solid var(--glass-brd);
-    padding: 7px 14px; border-radius: 999px; cursor: pointer;
-    backdrop-filter: blur(10px);
-    transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
-}
-.type-pill:hover { color: var(--neon); border-color: rgba(0, 255, 160, 0.45); background: rgba(0, 40, 28, 0.55); }
-
-.search-meta {
-    display: flex; justify-content: space-between;
-    padding: 0.3rem 0.25rem 0;
-    font-family: var(--font-mono);
-    font-size: 0.7rem; color: var(--muted); letter-spacing: 0.03em;
-}
-
-/* System status */
-.sys-status { display: flex; align-items: center; gap: 0.9rem; flex-shrink: 0; }
 .drift-link, .network-link {
     font-size: 0.68rem; font-family: var(--font-mono);
     color: var(--muted); text-decoration: none; letter-spacing: 0.06em;
@@ -214,35 +170,8 @@ body::after {
 .clock { font-size: 0.7rem; font-family: var(--font-mono); color: var(--muted); letter-spacing: 0.05em; white-space: nowrap; }
 
 /* ================================================================== */
-/* Media-type filter drawer                                           */
+/* Media-type filter (inline in the composer tools row)               */
 /* ================================================================== */
-.drawer-scrim {
-    position: fixed; inset: 0; z-index: 250;
-    background: rgba(0, 6, 4, 0.55);
-    backdrop-filter: blur(2px);
-    opacity: 0; pointer-events: none;
-    transition: opacity 0.25s var(--ease);
-}
-.drawer-scrim.open { opacity: 1; pointer-events: auto; }
-
-.type-drawer {
-    position: fixed; top: 0; right: 0; height: 100%;
-    width: min(380px, 90vw); z-index: 251;
-    transform: translateX(100%);
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    background: rgba(4, 12, 9, 0.86);
-    border-left: 1px solid var(--glass-brd);
-    backdrop-filter: blur(22px) saturate(1.2);
-    padding: 26px 24px;
-    overflow-y: auto;
-}
-.type-drawer.open { transform: none; }
-.type-drawer h2 {
-    font-family: var(--font-mono); font-size: 0.9rem; letter-spacing: 0.14em;
-    color: var(--neon); margin-bottom: 4px;
-}
-.type-drawer-sub { font-size: 0.78rem; color: var(--muted); margin-bottom: 22px; }
-
 .type-filters {
     display: flex; flex-direction: column; gap: 2px;
     font-size: 0.85rem; letter-spacing: 0.02em;
@@ -257,11 +186,6 @@ body::after {
 .type-filters label:hover { background: rgba(0, 255, 160, 0.06); color: rgba(0, 255, 160, 0.85); }
 .type-filters input { width: 16px; height: 16px; accent-color: var(--neon); cursor: pointer; }
 .type-filters label:has(input:checked) { color: var(--neon); }
-.type-drawer .tf-count {
-    display: block; margin: 14px 0 0; color: var(--neon);
-    font-family: var(--font-mono); font-size: 0.75rem;
-    font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
-}
 .item-card.type-hidden { display: none !important; }
 
 /* ================================================================== */
@@ -273,12 +197,6 @@ body::after {
     padding: 2.5rem 2rem 6rem;
     min-height: calc(100vh - var(--header-h) - 48px);
     transition: max-width 0.4s var(--ease), padding-right 0.4s var(--ease);
-}
-
-/* When answer panel is open, shrink content area */
-.main--panel-open {
-    max-width: calc(100vw - var(--panel-w) - 4rem);
-    margin-right: calc(var(--panel-w) + 2rem);
 }
 
 /* ================================================================== */
@@ -509,61 +427,6 @@ a.item-title:hover,
 .item-card--link:hover .item-arrow { color: var(--blue); transform: translate(2px, -2px); }
 
 /* ================================================================== */
-/* Answer panel — fixed right side, always present during query      */
-/* ================================================================== */
-.answer-panel {
-    position: fixed;
-    top: var(--header-h);
-    right: 0;
-    width: var(--panel-w);
-    height: calc(100vh - var(--header-h) - 36px);
-    background: rgba(2, 10, 7, 0.82);
-    border-left: 1px solid var(--glass-brd);
-    z-index: 150;
-    overflow-y: auto;
-    padding: 1.1rem 1.25rem;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border-hi) transparent;
-    backdrop-filter: blur(22px) saturate(1.2);
-    display: flex; flex-direction: column; gap: 0.75rem;
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.35);
-}
-
-.answer-panel__header {
-    border-bottom: 1px solid var(--glass-brd);
-    padding-bottom: 0.6rem;
-}
-
-.answer-panel__label {
-    font-size: 0.6rem; font-weight: 700;
-    letter-spacing: 0.2em; color: var(--green-dim);
-}
-
-/* Text: empty = muted placeholder, has-content = pops to full white instantly */
-.answer-panel__text {
-    font-family: var(--font-sans);
-    font-size: 0.88rem;
-    font-weight: 400;
-    line-height: 1.7;
-    color: var(--muted);
-    white-space: pre-wrap;
-    letter-spacing: 0.01em;
-    min-height: 3rem;
-}
-
-.answer-panel__text::before {
-    content: '...';
-    color: var(--muted);
-}
-
-.answer-panel__text.has-content {
-    color: var(--text-primary);
-}
-.answer-panel__text.has-content::before {
-    content: none;
-}
-
-/* ================================================================== */
 /* Error card                                                         */
 /* ================================================================== */
 .error-card {
@@ -614,55 +477,16 @@ a.item-title:hover,
 /* ================================================================== */
 /* Responsive                                                         */
 /* ================================================================== */
-@media (max-width: 900px) {
-    :root { --panel-w: 280px; }
-}
-
 @media (max-width: 640px) {
-    :root { --header-h: 110px; }
-
-    /* Stack: logo, then the search box + media-type pill, then the links/clock
-       BELOW the pill (drift, network/admin, clock never sit beside the search). */
-    .header-inner {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
-        gap: 0.6rem; padding: 0.6rem 0;
-    }
-    .logo { grid-column: 1; grid-row: 1; }
-    .search-zone { grid-column: 1; grid-row: 2; }
-    .sys-status { grid-column: 1; grid-row: 3; justify-content: flex-start; gap: 1.1rem; }
     .main { padding: 1.5rem 1rem 5rem; }
-    .app-header { padding: 0.55rem 1rem; min-height: auto; }
 
     /* Keep the +/mic/send buttons inside the box — let the input shrink. */
     .search-box { gap: 0.3rem; }
     .query-input { min-width: 0; }
     .add-btn, .mic-btn, .send-btn { flex: 0 0 auto; }
 
-    /* Media-type panel becomes a bottom sheet on mobile. */
-    .type-drawer {
-        top: auto; bottom: 0; left: 0; right: 0;
-        width: 100%; height: auto; max-height: 72vh;
-        transform: translateY(100%);
-        border-left: none; border-top: 1px solid var(--glass-brd);
-        border-radius: 18px 18px 0 0; padding: 20px 20px 28px;
-    }
-    .type-drawer.open { transform: translateY(0); }
-
     /* Results: single column on narrow screens */
     .items-list { grid-template-columns: 1fr; }
-
-    /* On mobile, panel docks at the bottom */
-    .answer-panel {
-        top: auto;
-        bottom: 36px;
-        right: 0; left: 0;
-        width: 100%;
-        height: 38vh;
-        border-left: none;
-        border-top: 1px solid var(--glass-brd);
-    }
-    .main--panel-open { max-width: var(--max-w); margin-right: auto; padding-bottom: calc(38vh + 3rem); }
 
     /* Media cards: stack the image on top, text full-width below (was a
        cramped thumbnail+text row on narrow screens). */

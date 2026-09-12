@@ -53,7 +53,7 @@ function addReportBtn(card, item) {
   const AUTO=.003; let vel=AUTO, drag=false, lastX=0;
   if(!reduce){
     document.addEventListener('pointerdown',e=>{
-      if(e.target.closest('.item-card, input, textarea, button, a, .type-drawer, .search-box, .topbar, .sidebar')) return;
+      if(e.target.closest('.item-card, input, textarea, button, a, .search-box, .topbar, .sidebar')) return;
       drag=true; lastX=e.clientX; vel=0;
     });
     document.addEventListener('pointermove',e=>{ if(!drag) return; const dx=e.clientX-lastX; lastX=e.clientX; vel=dx*.0006; t+=vel; });
