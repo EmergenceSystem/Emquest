@@ -5,111 +5,123 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=34">
+    <link rel="stylesheet" href="/static/style.css?v=40">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
 
-    <!-- Ambient background -->
+    <!-- Ambient background — vector mesh globe -->
     <canvas id="bg-canvas"></canvas>
 
-    <!-- ── Sticky header with search ─────────────────────────────── -->
-    <header class="app-header" id="app-header">
-        <div class="header-inner">
+    <div class="app">
 
-            <!-- Logo -->
-            <div class="logo">
-                <div class="logo-mark">
-                    <span class="logo-dot"></span>
-                    <span class="logo-dot"></span>
-                    <span class="logo-dot"></span>
+        <!-- ── Sidebar: search history (conversations) ─────────────── -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sb-top">
+                <div class="logo">
+                    <div class="logo-mark">
+                        <span class="logo-dot"></span>
+                        <span class="logo-dot"></span>
+                        <span class="logo-dot"></span>
+                    </div>
+                    <span class="logo-name">EMERGENCE</span>
+                    <span class="logo-tag">distributed</span>
                 </div>
-                <span class="logo-name">EMERGENCE</span>
-                <span class="logo-tag">distributed</span>
+                <button class="new-btn" id="new-search-btn" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    New search
+                </button>
             </div>
 
-            <!-- Search area — textarea + button -->
-            <div class="search-zone">
-                <div class="search-box" id="search-box">
-                    <textarea
-                        id="query-input"
-                        class="query-input"
-                        placeholder="Search the distributed mesh…"
-                        rows="1"
-                        autocomplete="off"
-                        spellcheck="false"
-                    ></textarea>
-                    <input type="file" id="media-file" accept="image/*" hidden>
-                    <button class="add-btn" id="add-btn" type="button" aria-label="Add image" title="Add an image (processed by velora)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                    </button>
-                    <button class="mic-btn" id="mic-btn" type="button" aria-label="Voice search" title="Dictate your query (local STT)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="9" y="2" width="6" height="12" rx="3"/>
-                            <path d="M5 11a7 7 0 0 0 14 0"/>
-                            <line x1="12" y1="18" x2="12" y2="22"/>
-                        </svg>
-                    </button>
-                    <button class="send-btn" id="send-btn" aria-label="Send">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"/>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                        </svg>
-                    </button>
-                </div>
-                <button class="type-pill" id="type-pill" type="button">▚ Media type</button>
-                <!-- Status line below search box -->
-                <div class="search-meta" id="search-meta">
-                    <span class="meta-status" id="meta-status"></span>
-                </div>
-            </div>
+            <div class="sb-label">SEARCHES</div>
+            <div class="conv-list" id="conv-list"></div>
 
-            <!-- System status -->
-            <div class="sys-status">
+            <div class="sb-foot">
+                <a href="/network" class="sb-net" id="footer-agent-count">agents loading…</a>
+                <div class="mem-row"><span>local memory</span><span id="mem-text">0 KB / 40 MB</span></div>
+                <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
+                <div class="sb-note">images lazy-fetched, not stored</div>
+            </div>
+        </aside>
+
+        <!-- ── Main column: topbar + scrollable flux + composer ────── -->
+        <div class="col">
+
+            <header class="topbar" id="app-header">
                 <a href="/drift" class="drift-link">drift ↗</a>
                 <span class="pulse-dot"></span>
                 <span id="clock" class="clock"></span>
+            </header>
+
+            <!-- Scrollable conversation flux -->
+            <div class="flux" id="flux">
+                <div class="flux-inner" id="flux-inner">
+                    <div class="empty-state" id="empty-state">
+                        <h1 class="welcome-title">Distributed discovery.</h1>
+                        <p class="welcome-text">Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
+                        <p class="empty-hint">All agents stand by.</p>
+                    </div>
+                    <!-- Turns appended here by JS -->
+                </div>
+            </div>
+
+            <!-- ── Composer at the bottom ──────────────────────────── -->
+            <div class="composer-wrap">
+                <div class="composer">
+                    <div class="search-box" id="search-box">
+                        <textarea
+                            id="query-input"
+                            class="query-input"
+                            placeholder="Search the distributed mesh…"
+                            rows="1"
+                            autocomplete="off"
+                            spellcheck="false"
+                        ></textarea>
+                        <input type="file" id="media-file" accept="image/*" hidden>
+                        <button class="send-btn" id="send-btn" aria-label="Send">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Options pulled out below the bar -->
+                    <div class="tools-row">
+                        <button class="add-btn" id="add-btn" type="button" aria-label="Attach a file" title="Attach an image (processed by velora)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                            </svg>
+                        </button>
+                        <button class="mic-btn" id="mic-btn" type="button" aria-label="Voice search" title="Dictate your query (local STT)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                                <path d="M5 11a7 7 0 0 0 14 0"/>
+                                <line x1="12" y1="18" x2="12" y2="22"/>
+                            </svg>
+                        </button>
+                        <button class="type-pill" id="type-pill" type="button">▚ Media type</button>
+                        <span class="meta-status" id="meta-status"></span>
+                    </div>
+
+                    <div class="composer-foot">
+                        <span class="meta-hint">↵ send &nbsp;·&nbsp; shift+↵ newline</span>
+                    </div>
+                </div>
             </div>
 
         </div>
-    </header>
-
-    <!-- ── Main content ───────────────────────────────────────────── -->
-    <main class="main" id="main">
-
-        <!-- Empty state -->
-        <div class="empty-state" id="empty-state">
-            <h1 class="welcome-title">Distributed discovery.</h1>
-            <p class="welcome-text">Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
-            <p class="empty-hint">All agents stand by.</p>
-        </div>
-
-        <!-- Results area — populated by JS -->
-        <div class="results" id="results" hidden></div>
-
-    </main>
-
-    <!-- ── Footer ────────────────────────────────────────────────── -->
-    <footer class="app-footer">
-        <span class="footer-name">EMERGENCE</span>
-        <span class="footer-sep">·</span>
-        <span id="footer-agent-count" class="footer-info">agents loading…</span>
-        <span class="footer-sep">·</span>
-        <a href="/drift" class="footer-info footer-drift">em_drift ↗</a>
-        <span class="footer-sep">·</span>
-        <span class="footer-info">v2.2.0</span>
-    </footer>
+    </div>
 
     <!-- Media-type filter drawer -->
     <div class="drawer-scrim" id="drawer-scrim"></div>
     <aside class="type-drawer" id="type-drawer" aria-label="Media type">
         <h2>// MEDIA TYPE</h2>
-        <div class="type-drawer-sub">Show only the selected types.</div>
+        <div class="type-drawer-sub">Applies to the current search only.</div>
         <div class="type-filters" id="type-filters">
             <label><input type="checkbox" value="text" checked> text</label>
             <label><input type="checkbox" value="image" checked> image</label>
@@ -121,6 +133,6 @@
     </aside>
 
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=39"></script>
+    <script src="/static/emergence.js?v=40"></script>
 </body>
 </html>
