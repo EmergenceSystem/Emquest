@@ -980,8 +980,10 @@ body { overflow: hidden; min-height: 0; }
     overflow-wrap: anywhere; backdrop-filter: blur(10px);
     animation: promptIn 0.25s var(--ease) both;
 }
-.bubble-user--image .u { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
+.bubble-user--image .u { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: var(--font-mono); }
 .bubble-user .up-icon { color: var(--neon); flex: none; }
+.bubble-user .up-img { display: block; width: 100%; max-width: 260px; max-height: 200px; object-fit: cover; border-radius: 8px; margin-top: 4px; }
+.media-msg.muted { color: var(--muted); }
 
 .bubble-ai { display: flex; gap: 0.7rem; align-items: flex-start; }
 .ai-avatar {

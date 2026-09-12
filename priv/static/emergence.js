@@ -88,22 +88,6 @@ setInterval(updateClock, 1000);
 updateClock();
 
 /* ================================================================== */
-/* Peer count                                                         */
-/* ================================================================== */
-async function refreshPeerCount() {
-    try {
-        const r = await fetch('/network/peers');
-        if (!r.ok) return;
-        const peers = await r.json();
-        const n  = Array.isArray(peers) ? peers.length : 0;
-        const el = document.getElementById('footer-agent-count');
-        if (el) el.textContent = `${n} peer${n !== 1 ? 's' : ''} · network ↗`;
-    } catch (_) {}
-}
-refreshPeerCount();
-setInterval(refreshPeerCount, 15000);
-
-/* ================================================================== */
 /* Conversation store (IndexedDB: db `emquest_chat`)                  */
 /* ================================================================== */
 const CDB_NAME = 'emquest_chat', CDB_VER = 1;
@@ -327,7 +311,7 @@ async function submitQuery() {
         runMedia(fetch('/media', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: imgUrl }),
-        }), imgUrl);
+        }), imgUrl, imgUrl);
         return;
     }
 
@@ -983,9 +967,10 @@ document.getElementById('media-file')?.addEventListener('change', function () {
         newMediaTurn(f.name, { image: true }).innerHTML = '<div class="media-msg err">Only images are supported for now.</div>';
         return;
     }
+    const preview = URL.createObjectURL(f);
     const fd = new FormData();
     fd.append('file', f, f.name);
-    runMedia(fetch('/media', { method: 'POST', body: fd }), f.name);
+    runMedia(fetch('/media', { method: 'POST', body: fd }), f.name, preview);
 });
 
 function labelShort(s) {
@@ -999,24 +984,27 @@ function newMediaTurn(label, opts) {
     const el = document.createElement('div');
     el.className = 'turn';
     const full = String(label), short = labelShort(full);
+    const previewImg = opts.preview ? `<img class="up-img" src="${escAttr(opts.preview)}" alt="${escAttr(short)}">` : '';
     el.innerHTML =
-        `<div class="bubble-user${opts.image ? ' bubble-user--image' : ''}" title="${escAttr(full)}"><div class="u">${opts.image ? '<span class="up-icon">🖼</span>' : ''}${escHtml(short)}</div></div>`
+        `<div class="bubble-user${opts.image ? ' bubble-user--image' : ''}" title="${escAttr(full)}"><div class="u">${opts.image ? '<span class="up-icon">🖼</span>' : ''}${escHtml(short)}${previewImg}</div></div>`
         + `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body"></div></div>`;
     fluxInner().appendChild(el);
     scrollFluxToBottom();
     return el.querySelector('.ai-body');
 }
-async function runMedia(fetchPromise, label) {
+async function runMedia(fetchPromise, label, preview) {
     if (!currentConvId) await createConversation(label || 'image');
-    const body = newMediaTurn(label || 'image', { image: true });
+    const body = newMediaTurn(label || 'image', { image: true, preview });
     body.innerHTML = '<div class="progress-log"><div class="progress-line"><span class="progress-arrow">›</span> velora is rendering the image…</div></div>';
     try {
         const resp = await fetchPromise;
         const data = await resp.json();
-        if (!resp.ok || data.error) { body.innerHTML = `<div class="media-msg err">${escHtml(data.error || ('HTTP ' + resp.status))}</div>`; return; }
+        /* velora unavailable: don't error out — the image already sits in the
+           message like a prompt, so just note it and stop. */
+        if (!resp.ok || data.error) { body.innerHTML = '<div class="media-msg muted">velora offline — image attached, not processed.</div>'; return; }
         const card = await pollMediaPrepare(data);
         showRaster(body, card);
-    } catch (e) { body.innerHTML = `<div class="media-msg err">${escHtml(String((e && e.message) || e))}</div>`; }
+    } catch (e) { body.innerHTML = '<div class="media-msg muted">velora offline — image attached, not processed.</div>'; }
 }
 async function pollMediaPrepare(resp) {
     if (!resp || resp.status !== 'processing') return resp;
