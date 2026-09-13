@@ -18,19 +18,6 @@ const MODEL   = 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';  /* ~350 MB, cached after f
 const PREF_KEY = 'emquest.slm.enabled';
 const MAX_ITEMS = 6;      /* snippets fed to the model */
 const MAX_TOKENS = 200;   /* answer length cap        */
-const MAX_XLATE_BATCH = 40;   /* strings per translate call */
-
-/* Byte-identical to test/js/helpers/slm_parse.mjs — keep in sync. */
-function parseTranslation(raw, src) {
-    const lines = String(raw == null ? '' : raw).split(/\r?\n/);
-    const cleaned = lines.map(l => l.replace(/^\s*\d+[.)]\s*/, '').trim());
-    const out = [];
-    for (let i = 0; i < src.length; i++) {
-        const v = cleaned[i];
-        out.push(v && v.length ? v : src[i]);
-    }
-    return out;
-}
 
 let _webllm = null;   /* the imported library                 */
 let _engine = null;   /* Promise<engine> once init started    */
@@ -142,26 +129,38 @@ async function translate(texts, lang, handlers) {
     if (!Array.isArray(texts) || !texts.length) return [];
 
     const engine = await ensureEngine(handlers.onProgress);
+    const system =
+        `Translate the UI text into ${lang}. Reply with ONLY the translation — no `
+        + 'quotes, no notes, no repetition, no explanation. Preserve placeholders '
+        + '({x}, %s, [1]), HTML entities (&nbsp;), URLs and numbers exactly. Keep it '
+        + 'short and idiomatic for a UI.';
+
+    /* One request per string: a shared batch lets a single runaway generation
+     * (the 0.5B model can loop on a long input) starve the whole set, so we
+     * bound each string's tokens by its own length and reject runaway/garbage
+     * output (falling back to the source for that line only). */
     const out = [];
-    for (let i = 0; i < texts.length; i += MAX_XLATE_BATCH) {
+    for (let i = 0; i < texts.length; i++) {
         if (handlers.signal && handlers.signal.aborted) break;
-        const batch = texts.slice(i, i + MAX_XLATE_BATCH);
-        const numbered = batch.map((s, k) => `${k + 1}. ${String(s).replace(/\n/g, ' ')}`).join('\n');
-        const system =
-            `You are a UI string translator. Translate each numbered line into ${lang}. `
-            + 'Output exactly one translation per line, in the same order, with no numbering '
-            + 'and no commentary. Preserve placeholders such as {x}, %s, [1], HTML entities '
-            + '(&nbsp;), URLs and numbers exactly. Keep it short and idiomatic for a UI.';
-        const resp = await engine.chat.completions.create({
-            messages: [{ role: 'system', content: system }, { role: 'user', content: numbered }],
-            stream: false, temperature: 0.1, max_tokens: 1024,
-        });
-        const raw = resp && resp.choices && resp.choices[0] && resp.choices[0].message
-            ? (resp.choices[0].message.content || '') : '';
-        out.push(...parseTranslation(raw, batch));
-        if (handlers.onProgress) handlers.onProgress(Math.min(1, (i + batch.length) / texts.length), 'translating');
+        const src = String(texts[i] == null ? '' : texts[i]);
+        let translated = src;
+        if (src.trim()) {
+            const cap = Math.min(400, Math.max(24, Math.ceil(src.length / 2) + 24));
+            try {
+                const resp = await engine.chat.completions.create({
+                    messages: [{ role: 'system', content: system },
+                               { role: 'user', content: src.replace(/\n/g, ' ') }],
+                    stream: false, temperature: 0.1, max_tokens: cap,
+                });
+                const raw = (resp && resp.choices && resp.choices[0] && resp.choices[0].message
+                    ? (resp.choices[0].message.content || '') : '').trim();
+                /* reject empty or runaway output (loop/hallucination) */
+                if (raw && raw.length <= src.length * 6 + 40) translated = raw;
+            } catch (_) { /* keep source for this line */ }
+        }
+        out.push(translated);
+        if (handlers.onProgress) handlers.onProgress((i + 1) / texts.length, 'translating');
     }
-    while (out.length < texts.length) out.push(texts[out.length]);
     return out;
 }
 
