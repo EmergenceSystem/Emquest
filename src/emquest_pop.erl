@@ -252,7 +252,15 @@ handle_cast({penalize, Id}, #{node := Node} = S) when is_pid(Node) ->
 handle_cast(_Msg, State) -> {noreply, State}.
 handle_info(_Msg, State) -> {noreply, State}.
 
-terminate(_Reason, _State) -> ok.
+%% Stop the em_pop node we own on shutdown. It is linked, but a `normal'
+%% exit signal does not kill a non-trapping process, so it would otherwise
+%% linger (holding its cowboy listener + the em_pop_store DETS table).
+terminate(_Reason, State) ->
+    case maps:get(node, State, undefined) of
+        Node when is_pid(Node) -> catch gen_server:stop(Node, normal, 1000);
+        _                      -> ok
+    end,
+    ok.
 
 %%====================================================================
 %% Internal

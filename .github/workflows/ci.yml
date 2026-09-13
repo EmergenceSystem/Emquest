@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          rebar3-version: "3"
+
+      - name: Cache rebar3 + PLT
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build/default/*_plt
+          key: ${{ runner.os }}-otp28-${{ hashFiles('rebar.config', 'rebar.lock') }}
+
+      - name: Compile
+        run: rebar3 compile
+
+      - name: EUnit
+        run: rebar3 eunit
+
+      - name: Common Test
+        run: rebar3 ct
+
+      - name: Dialyzer
+        run: rebar3 dialyzer

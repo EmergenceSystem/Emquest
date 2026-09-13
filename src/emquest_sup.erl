@@ -60,6 +60,9 @@ start_link() ->
 init([]) ->
     emquest_ratelimit:init(),
     _ = timer:apply_interval(3600000, emquest_ratelimit, sweep, [3600]),
+    %% Open the moderation-reports DETS table at boot (rather than lazily on
+    %% first report) so the file is ready and errors surface early.
+    _ = (catch emquest_reports:open()),
     case http_enabled() of
         true ->
             Port     = get_port(),

@@ -104,15 +104,18 @@ all() ->
     case queen:conf_path() of
         undefined -> #{};
         Path ->
-            Mtime = mtime(Path),
+            %% Key the cache on BOTH path and mtime: the path can change
+            %% (e.g. HOME differs between test cases) while two files share
+            %% an mtime (second resolution, or both absent -> `none').
+            Key = {Path, mtime(Path)},
             case persistent_term:get(?CACHE, undefined) of
-                {Mtime, Map} -> Map;
+                {Key, Map} -> Map;
                 _ ->
                     Map = case file:read_file(Path) of
                               {ok, Bin} -> queen:parse_conf(Bin);
                               _         -> #{}
                           end,
-                    persistent_term:put(?CACHE, {Mtime, Map}),
+                    persistent_term:put(?CACHE, {Key, Map}),
                     Map
             end
     end.

@@ -185,9 +185,7 @@ init(Req0, query) ->
                     {ok, Req1, query}
             end;
         _ ->
-            {ok, cowboy_req:reply(405,
-                #{<<"content-type">> => <<"application/json">>},
-                <<"{\"error\":\"Use POST\"}">>, Req0), query}
+            bad_method(Req0, query)
     end;
 
 %% Media: an uploaded image (multipart) or an image URL ({"url":...}) is routed
@@ -198,9 +196,7 @@ init(Req0, media) ->
     case cowboy_req:method(Req0) of
         <<"POST">> -> emquest_media:media_post(Req0);
         _ ->
-            {ok, cowboy_req:reply(405,
-                #{<<"content-type">> => <<"application/json">>},
-                <<"{\"error\":\"Use POST\"}">>, Req0), media}
+            bad_method(Req0, media)
     end;
 %% GET /media/prepare/:id — proxy velora's async prepare poll so the browser can
 %% poll here (same origin) instead of us blocking the /media request open for the
@@ -215,9 +211,7 @@ init(Req0, stt) ->
                 true  -> emquest_media:stt_do(Req0)
             end;
         _ ->
-            {ok, cowboy_req:reply(405,
-                #{<<"content-type">> => <<"application/json">>},
-                <<"{\"error\":\"Use POST\"}">>, Req0), stt}
+            bad_method(Req0, stt)
     end;
 
 %% /admin — static shell page (ungated shell; the DATA endpoints below are gated).
@@ -837,9 +831,9 @@ response_ok(RespMap, Items) ->
         _ -> not require_signatures()
     end.
 
+%% Only ever called with binaries (see response_ok/2's guards).
 decode_b64(B) when is_binary(B) ->
-    case catch base64:decode(B) of D when is_binary(D) -> D; _ -> error end;
-decode_b64(_) -> error.
+    case catch base64:decode(B) of D when is_binary(D) -> D; _ -> error end.
 
 %%--------------------------------------------------------------------
 %% @doc Spawn one worker process per (sub-query × em_pop peer).
@@ -886,10 +880,7 @@ spawn_pop_workers(SubQueries, Peers, Parent) ->
 %% sources pass through untouched.
 stamp_source(Items, Id, Name) when is_binary(Id) ->
     Sid = base64:encode(Id),
-    [case I of
-         M when is_map(M) -> M#{<<"__source_id">> => Sid, <<"__source">> => Name};
-         _ -> I
-     end || I <- Items];
+    [I#{<<"__source_id">> => Sid, <<"__source">> => Name} || I <- Items];
 stamp_source(Items, _Id, _Name) -> Items.
 
 %% @private
@@ -1121,6 +1112,12 @@ too_many(Req, Tag) ->
         #{<<"content-type">> => <<"application/json">>,
           <<"retry-after">>  => <<"10">>},
         <<"{\"error\":\"rate limited\"}">>, Req), Tag}.
+
+%% @private 405 reply for a non-POST request on a POST-only route.
+bad_method(Req, Tag) ->
+    {ok, cowboy_req:reply(405,
+        #{<<"content-type">> => <<"application/json">>},
+        <<"{\"error\":\"Use POST\"}">>, Req), Tag}.
 
 %% @doc Response headers for HTML pages: strict CSP + hardening. No inline
 %% or third-party script is permitted (`script-src 'self''). `style-src'/

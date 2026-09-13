@@ -17,6 +17,12 @@
 -module(emquest_preview).
 
 -export([fetch/1]).
+-export([describe/1]).   %% exported for offline extraction tests
+
+%% @doc The pure extraction step: pick the best description from raw HTML,
+%% without any network fetch. `fetch/1' = safe_get + `describe/1'.
+-spec describe(binary()) -> binary().
+describe(Html) -> best_description(Html).
 
 -spec fetch(binary()) -> {ok, binary()} | {error, term()}.
 fetch(<<>>) -> {error, empty_url};

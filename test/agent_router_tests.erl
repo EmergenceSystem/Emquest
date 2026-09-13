@@ -109,3 +109,24 @@ select_empty_index_still_keeps_live_media_peers_test() ->
 select_no_peers_returns_empty_test() ->
     ?assertEqual([], agent_router:select([1.0, 0.0],
         #{peers => [], index => #{}, k => 5})).
+
+%%====================================================================
+%% with_media/2 — the exported entry emquest_handler:ensure_media_peers/1
+%% reuses. Guards the export + arity (a missing export crashed the
+%% fallback query path with `undef').
+%%====================================================================
+
+with_media_unions_media_peers_test() ->
+    Selected = [{peer(<<"a">>, <<"h1">>, 1), 0.9}],
+    All = [peer(<<"a">>, <<"h1">>, 1),
+           peer(<<"openverse_filter">>, <<"hm">>, 9)],
+    Result = agent_router:with_media(Selected, All),
+    ?assertEqual([<<"a">>, <<"openverse_filter">>], names(Result)).
+
+with_media_empty_selection_and_peers_is_empty_test() ->
+    ?assertEqual([], agent_router:with_media([], [])).
+
+with_media_ignores_non_media_and_portless_test() ->
+    All = [peer(<<"random_filter">>, <<"h1">>, 1),
+           maps:remove(query_port, peer(<<"met_filter">>, <<"hm">>, 9))],
+    ?assertEqual([], agent_router:with_media([], All)).
