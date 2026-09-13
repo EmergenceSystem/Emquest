@@ -31,7 +31,6 @@
   <<"nf_filter">> => <<"French AFNOR NF standards, norms, technical standards, normes francaises">>,
   <<"nominatim_filter">> => <<"places, cities, countries, addresses, geography, map locations, coordinates, geocoding, such as Paris Tokyo streets">>,
   <<"npm_filter">> => <<"JavaScript npm packages, Node modules, frontend libraries, such as react express lodash">>,
-  <<"ollama_filter">> => <<"local large language model answers, AI chat, LLM generated text via Ollama">>,
   <<"openlibrary_filter">> => <<"books, authors, novels, book search, ISBN, literature, such as Tolkien Harry Potter">>,
   <<"openmeteo_filter">> => <<"weather forecast, temperature, wind, rain, meteo, current weather for a city">>,
   <<"openverse_filter">> => <<"openly-licensed images and audio, Creative Commons photos and sounds, free media, pictures of anything">>,
