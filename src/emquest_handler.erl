@@ -1143,8 +1143,9 @@ security_headers(ContentType) ->
 %% security_headers/1 plus exactly what the on-device SLM needs
 %% (priv/static/slm.js -> vendored priv/static/vendor/web-llm.js):
 %%   * `'wasm-unsafe-eval'' in script-src   — WebLLM compiles WebAssembly.
-%%   * huggingface.co (+ its cdn-lfs.* redirect targets) in connect-src
-%%     — model weights + mlc-chat-config.json are fetched from there.
+%%   * huggingface.co + *.huggingface.co + *.hf.co in connect-src — model
+%%     weights + mlc-chat-config.json are fetched from HF, and large weight
+%%     shards now redirect to the HF Xet CDN (us.aws.cdn.hf.co, *.hf.co).
 %%   * raw.githubusercontent.com in connect-src — the model wasm lib
 %%     (mlc-ai/binary-mlc-llm-libs/.../web-llm-models/*.wasm) is fetched
 %%     then instantiated in the browser.
@@ -1160,7 +1161,7 @@ security_headers_app(ContentType) ->
             "font-src 'self' https://fonts.gstatic.com data:; "
             "img-src 'self' https: data:; media-src 'self' https:; "
             "connect-src 'self' https://huggingface.co https://*.huggingface.co "
-            "https://raw.githubusercontent.com; "
+            "https://*.hf.co https://raw.githubusercontent.com; "
             "frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,
       <<"x-content-type-options">>  => <<"nosniff">>,
       <<"x-frame-options">>         => <<"DENY">>,
