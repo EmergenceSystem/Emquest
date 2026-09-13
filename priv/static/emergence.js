@@ -1288,11 +1288,12 @@ async function openSettings() {
     const langStatus = document.getElementById('set-lang-status');
     if (langInput) langInput.value = (window.EmquestI18n ? window.EmquestI18n.current() : 'en');
     const slmOn = !!(window.EmquestSLM && window.EmquestSLM.enabled && window.EmquestSLM.enabled());
-    const langReady = slmOk && slmOn;
-    if (langInput) langInput.disabled = !langReady;
-    if (langApply) langApply.disabled = !langReady;
-    if (langStatus) langStatus.textContent = !slmOk ? T('Requires on-device AI (WebGPU)')
-                                            : (!slmOn ? T('Enable on-device AI above to translate') : '');
+    /* Curated languages translate without the SLM, so the row is always usable;
+     * the note only explains that OTHER languages need on-device AI. */
+    if (langInput) langInput.disabled = false;
+    if (langApply) langApply.disabled = false;
+    if (langStatus) langStatus.textContent = (!slmOk || !slmOn)
+        ? T('Listed languages work offline; others need on-device AI (WebGPU)') : '';
     modal.hidden = false;
 }
 function closeSettings() { const m = document.getElementById('settings-modal'); if (m) m.hidden = true; }

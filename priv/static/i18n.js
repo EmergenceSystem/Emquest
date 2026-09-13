@@ -78,11 +78,21 @@
         'No searches yet.',
         'Delete ALL saved searches from this device? This cannot be undone.',
         'Requires on-device AI (WebGPU)', 'Enable on-device AI above to translate',
+        'Listed languages work offline; others need on-device AI (WebGPU)',
         'Apply', 'Language',
         'result', 'results', 'aggregated', 'top domain',
         'DNS record', 'DNS records', 'media item', 'media items',
     ];
     const _seen = new Set(JS_STRINGS);
+
+    /* Bump when the curated dictionaries (i18n_dict.js) change, to invalidate
+     * per-language caches that were built against the old translations. */
+    const I18N_REV = '1';
+    /* Normalise a source for dictionary lookup: HTML markup emits &nbsp;
+     * (U+00A0) which reaches the DOM as a non-breaking space; dictionary keys
+     * are written with plain spaces, so fold it before matching. */
+    function norm(s) { return String(s == null ? '' : s).replace(/ /g, ' '); }
+    function verOf(sources) { return catalogVersion(sources) + '.' + I18N_REV; }
 
     /* ---- state ---- */
     let _lang = 'en';
@@ -116,12 +126,30 @@
             return;
         }
         const sources = allSources();
-        const ver = catalogVersion(sources);
+        const ver = verOf(sources);
         let cache = readCache(lang);
         if (!cacheValid(cache, ver)) {
-            const translations = await window.EmquestSLM.translate(sources, lang, handlers);
+            /* Curated human dictionary first (perfect, instant, no WebGPU); the
+             * SLM only fills strings the dictionary does not cover. */
+            const dict = (window.EmquestI18nDict && window.EmquestI18nDict[lang]) || {};
             const map = {};
-            sources.forEach((s, i) => { map[s] = translations[i] != null ? translations[i] : s; });
+            const missing = [];
+            for (const s of sources) {
+                const d = dict[norm(s)];
+                if (d != null) map[s] = d; else missing.push(s);
+            }
+            if (missing.length) {
+                let translations = [];
+                try {
+                    if (window.EmquestSLM && (await supported())
+                        && window.EmquestSLM.enabled && window.EmquestSLM.enabled()) {
+                        translations = await window.EmquestSLM.translate(missing, lang, handlers);
+                    }
+                } catch (_) { translations = []; }
+                missing.forEach((s, i) => {
+                    map[s] = (translations[i] != null && translations[i] !== '') ? translations[i] : s;
+                });
+            }
             cache = { ver, map: mergeMap(sources, map) };
             writeCache(lang, cache);
         }
@@ -132,7 +160,7 @@
 
     function boot() {
         if (_lang === 'en') return;
-        const ver = catalogVersion(allSources());
+        const ver = verOf(allSources());
         const cache = readCache(_lang);
         if (cacheValid(cache, ver)) { _map = cache.map; apply(); }
         else { _lang = 'en'; }
