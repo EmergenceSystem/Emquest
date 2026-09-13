@@ -29,6 +29,9 @@ let   MEM_BUDGET   = MEM_DEFAULT;          /* effective cap (mutable)        */
 let   MEM_QUOTA    = 0;                     /* estimated origin quota (bytes) */
 const COMPRESS_AT  = 0.80;                 /* compress oldest turns at 80%   */
 
+/* i18n helper: translate a UI literal (identity until a language is chosen). */
+const T = (s) => (window.EmquestI18n ? window.EmquestI18n.t(s) : s);
+
 const clampBudget = (n) => Math.max(MEM_MIN, Math.min(budgetCeil(), Math.floor(n) || 0));
 /* Upper bound the user may pick: 90% of quota if known, else the hard cap. */
 function budgetCeil() { return MEM_QUOTA ? Math.min(MEM_HARD_CAP, Math.floor(MEM_QUOTA * 0.9)) : MEM_HARD_CAP; }
@@ -231,7 +234,7 @@ async function renderSidebar() {
     convs.sort((a, b) => b.updatedAt - a.updatedAt);
     list.innerHTML = convs.length
         ? convs.map(c => `<div class="conv${c.id === currentConvId ? ' active' : ''}" data-id="${escAttr(c.id)}" title="${escAttr(c.title)}">${escHtml(c.title)}<span class="conv-date">${escHtml(relTime(c.updatedAt))}</span><button class="conv-del" data-id="${escAttr(c.id)}" title="Delete this search" aria-label="Delete this search">✕</button></div>`).join('')
-        : '<div class="conv-empty">No searches yet.</div>';
+        : `<div class="conv-empty">${T('No searches yet.')}</div>`;
     updateMemBar();
 }
 async function updateMemBar() {
@@ -280,7 +283,7 @@ function newTurn(query) {
         `<div class="turn-head">`
         +   `<div class="bubble-user"><div class="u">${escHtml(query)}</div></div>`
         +   `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
-        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
+        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">${T('llm offline')}</span></div>`
         +     `<div class="syn-text muted">…</div></div>`
         +     `<div class="progress-log"><div class="pbar"><div class="pbar-fill"></div></div><span class="pbar-count"></span></div>`
         +   `</div></div>`
@@ -314,7 +317,7 @@ function renderSavedTurn(rec) {
         `<div class="turn-head">`
         +   userBubble
         +   `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
-        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
+        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">${T('llm offline')}</span></div>`
         +     `<div class="syn-text">${escHtml(rec.synthesis || '')}</div></div>`
         +   `</div></div>`
         + `</div>`
@@ -531,7 +534,7 @@ function renderSynthesis(t) {
     const ordered = (t.order.length ? t.order : [...t.items.keys()]);
     const items = ordered.map(sid => t.items.get(sid)).filter(Boolean);
     if (items.length === 0) {
-        t.synthTextEl.textContent = 'No results found for this query.';
+        t.synthTextEl.textContent = T('No results found for this query.');
         t.synthTextEl.classList.remove('muted');
         return;
     }
@@ -552,23 +555,23 @@ async function localSummarize(t, items, floor) {
     t._slmRan = true;
     const el = t.synthTextEl, badge = t.badgeEl;
     const setBadge = (txt, cls) => { if (!badge) return; badge.textContent = txt; badge.className = cls; };
-    setBadge('local · loading model…', 'syn-badge-local');
+    setBadge(T('local · loading model…'), 'syn-badge-local');
     let started = false;
     try {
         const text = await S.summarize(t.query, items, {
-            onProgress: (p) => { if (!started) setBadge('local · loading model ' + Math.round((p || 0) * 100) + '%', 'syn-badge-local'); },
+            onProgress: (p) => { if (!started) setBadge(T('local · loading model') + ' ' + Math.round((p || 0) * 100) + '%', 'syn-badge-local'); },
             onToken: (d) => {
-                if (!started) { started = true; el.textContent = ''; setBadge('local · summarising…', 'syn-badge-local'); }
+                if (!started) { started = true; el.textContent = ''; setBadge(T('local · summarising…'), 'syn-badge-local'); }
                 el.textContent += d;
                 if (nearBottom(fluxEl())) scrollFluxToBottom();
             },
         });
-        if (text) { el.textContent = text; setBadge('local ai', 'syn-badge-local'); persistSynthesis(t, text); }
-        else { el.textContent = floor; setBadge('llm offline', 'syn-badge-off'); }
+        if (text) { el.textContent = text; setBadge(T('local ai'), 'syn-badge-local'); persistSynthesis(t, text); }
+        else { el.textContent = floor; setBadge(T('llm offline'), 'syn-badge-off'); }
     } catch (e) {
         console.warn('[emquest] slm', e);
         el.textContent = floor;
-        setBadge('llm offline', 'syn-badge-off');
+        setBadge(T('llm offline'), 'syn-badge-off');
     }
 }
 
@@ -1267,7 +1270,7 @@ async function openSettings() {
     const dev   = document.getElementById('set-device');
     if (range) { range.min = mbRound(MEM_MIN); range.max = ceilMb; range.value = mbRound(MEM_BUDGET); }
     if (num)   { num.min   = mbRound(MEM_MIN); num.max   = ceilMb; num.value   = mbRound(MEM_BUDGET); }
-    if (cur)   cur.textContent = fmtSize(usage) + ' used of ' + fmtSize(MEM_BUDGET);
+    if (cur)   cur.textContent = fmtSize(usage) + ' ' + T('used of') + ' ' + fmtSize(MEM_BUDGET);
     if (dev)   dev.textContent = MEM_QUOTA
         ? 'Device grants ~' + fmtSize(MEM_QUOTA) + ' to this app (max cap ' + ceilMb + ' MB).'
         : 'Device quota unknown; capped at ' + ceilMb + ' MB.';
@@ -1279,6 +1282,14 @@ async function openSettings() {
     try { slmOk = !!(S && await S.supported()); } catch (_) {}
     if (slmRow) slmRow.hidden = !slmOk;
     if (slmBox && S) slmBox.checked = S.enabled();
+    /* Language row: prefill current, gate on SLM support. */
+    const langInput  = document.getElementById('set-lang');
+    const langApply  = document.getElementById('set-lang-apply');
+    const langStatus = document.getElementById('set-lang-status');
+    if (langInput) langInput.value = (window.EmquestI18n ? window.EmquestI18n.current() : 'en');
+    if (langInput) langInput.disabled = !slmOk;
+    if (langApply) langApply.disabled = !slmOk;
+    if (langStatus) langStatus.textContent = slmOk ? '' : T('Requires on-device AI (WebGPU)');
     modal.hidden = false;
 }
 function closeSettings() { const m = document.getElementById('settings-modal'); if (m) m.hidden = true; }
@@ -1309,12 +1320,26 @@ function closeSettings() { const m = document.getElementById('settings-modal'); 
         if (range) range.value = mbRound(MEM_BUDGET);
         if (num)   num.value   = mbRound(MEM_BUDGET);
         const cur = document.getElementById('set-budget-cur');
-        if (cur) { let u = 0; try { u = await getUsage(); } catch (_) {} cur.textContent = fmtSize(u) + ' used of ' + fmtSize(MEM_BUDGET); }
+        if (cur) { let u = 0; try { u = await getUsage(); } catch (_) {} cur.textContent = fmtSize(u) + ' ' + T('used of') + ' ' + fmtSize(MEM_BUDGET); }
     });
     document.getElementById('set-clear')?.addEventListener('click', async () => {
-        if (!confirm('Delete ALL saved searches from this device? This cannot be undone.')) return;
+        if (!confirm(T('Delete ALL saved searches from this device? This cannot be undone.'))) return;
         await clearAllData();
         closeSettings();
+    });
+    document.getElementById('set-lang-apply')?.addEventListener('click', async () => {
+        const val = (document.getElementById('set-lang')?.value || 'en').trim() || 'en';
+        const status = document.getElementById('set-lang-status');
+        const set = (m) => { if (status) status.textContent = m; };
+        if (!window.EmquestI18n) return;
+        try {
+            set(T('local · loading model') + ' …');
+            await window.EmquestI18n.setLanguage(val, {
+                onProgress: (p) => set(T('local · loading model') + ' ' + Math.round((p || 0) * 100) + '%'),
+            });
+            set('');
+            closeSettings();
+        } catch (e) { console.warn('[emquest] i18n', e); set(T('Requires on-device AI (WebGPU)')); }
     });
 })();
 
