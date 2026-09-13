@@ -32,7 +32,7 @@
 
 -callback run(Ctx :: map()) -> {ok, map()} | skip.
 
--export([run_phase/2, conf/0]).
+-export([run_phase/2, doc_text/1]).
 
 %%--------------------------------------------------------------------
 %% @doc Fold the enabled meta-agents for `Phase' over `Ctx'.
@@ -48,20 +48,20 @@ run_phase(Phase, Ctx) ->
     lists:foldl(fun(Mod, Acc) -> run_one(Mod, Phase, Acc) end,
                 Ctx, phase_agents(Phase)).
 
-%% @doc Return the raw `[agents]' section of `emergence.conf' as a
-%% `#{string() => string()}' map (same shape `queen:parse_conf/1'
-%% produces per-section) — used by meta-agents that need their own
-%% tunables (e.g. `agent_router' reading `router_k').
--spec conf() -> #{string() => string()}.
-conf() ->
-    case queen:conf_path() of
-        undefined -> #{};
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} -> maps:get("agents", queen:parse_conf(Bin), #{});
-                _         -> #{}
-            end
-    end.
+%% @doc Title + resume text for a raw agent result item, used as the
+%% document side fed to the embedder (`agent_dedup') and the
+%% cross-encoder (`agent_judge'). Shared here so both meta-agents use
+%% the exact same extraction.
+-spec doc_text(map()) -> binary().
+doc_text(Item) ->
+    Props = maps:get(<<"properties">>, Item, Item),
+    L = to_bin(maps:get(<<"title">>,  Props, maps:get(<<"label">>, Props, <<>>))),
+    V = to_bin(maps:get(<<"resume">>, Props, maps:get(<<"value">>, Props, <<>>))),
+    case V of <<>> -> L; _ -> <<L/binary, " ", V/binary>> end.
+
+%% @private
+to_bin(B) when is_binary(B) -> B;
+to_bin(_) -> <<>>.
 
 %%====================================================================
 %% Internal
@@ -102,7 +102,4 @@ phase_agents(_Phase) ->
 %% @doc `[agents] Name = on|off' — defaults to `on' when unset so a
 %% missing config section doesn't silently disable everything.
 agent_on(Name) ->
-    case maps:get(Name, conf(), "on") of
-        "off" -> false;
-        _     -> true
-    end.
+    emconf:get_bool("agents", Name, true).

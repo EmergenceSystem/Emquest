@@ -52,7 +52,7 @@ run(#{query := Query, sortedsids := SortedSids, scores := ScoresMap,
     case Head of
         [] -> skip;
         _  ->
-            Docs = [doc_text(maps:get(Sid, ItemsBySid, #{})) || Sid <- Head],
+            Docs = [em_agent:doc_text(maps:get(Sid, ItemsBySid, #{})) || Sid <- Head],
             case em_hf:rerank(Query, Docs) of
                 {ok, Scores} when length(Scores) =:= length(Head) ->
                     {ok, Ctx#{sortedsids => reorder_ce(Head, Scores) ++ Tail}};
@@ -80,32 +80,10 @@ reorder_ce(Sids, Scores) ->
 %% Internal
 %%====================================================================
 
-%% @private Title + resume text for a raw item (same shape as the
-%% router/dedup use), fed to the cross-encoder as the document side.
-doc_text(Item) ->
-    Props = maps:get(<<"properties">>, Item, Item),
-    L = to_bin(maps:get(<<"title">>,  Props, maps:get(<<"label">>, Props, <<>>))),
-    V = to_bin(maps:get(<<"resume">>, Props, maps:get(<<"value">>, Props, <<>>))),
-    case V of <<>> -> L; _ -> <<L/binary, " ", V/binary>> end.
-
-%% @private
-to_bin(B) when is_binary(B) -> B;
-to_bin(_) -> <<>>.
-
 %% @private
 split_top(Sids, N) ->
     K = min(max(N, 0), length(Sids)),
     lists:split(K, Sids).
 
-%% @private
-%% @doc `[agents] judge_top_n' from `emergence.conf', default 20.
-judge_top_n() ->
-    case maps:get("judge_top_n", em_agent:conf(), undefined) of
-        undefined -> ?DEFAULT_TOP_N;
-        V when is_list(V) ->
-            case string:to_integer(V) of
-                {Int, _} when is_integer(Int), Int > 0 -> Int;
-                _ -> ?DEFAULT_TOP_N
-            end;
-        _ -> ?DEFAULT_TOP_N
-    end.
+%% @private `[agents] judge_top_n' from `emergence.conf', default 20.
+judge_top_n() -> emconf:get_int("agents", "judge_top_n", ?DEFAULT_TOP_N).

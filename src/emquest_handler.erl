@@ -47,8 +47,8 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_from_disco/2, fetch_preview/1, parse_stt_text/1, normalise_item/1,
-         security_headers/1, security_headers/2, internal_exposed/0,
+-export([init/2, fetch_from_agent/2, fetch_from_disco/2, normalise_item/1,
+         security_headers/1, internal_exposed/0,
          client_ip/1, response_ok/2, fetch_via_relay/3, cap_items/1]).
 -export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
 
@@ -81,7 +81,7 @@ init(Req0, drift) ->
 init(Req0, preview) ->
     QS  = cowboy_req:parse_qs(Req0),
     Url = proplists:get_value(<<"url">>, QS, <<>>),
-    {Code, Body} = case fetch_preview(Url) of
+    {Code, Body} = case emquest_preview:fetch(Url) of
         {ok, Desc} ->
             JSON = iolist_to_binary(json:encode(#{<<"description">> => Desc})),
             {200, JSON};
@@ -121,7 +121,7 @@ init(Req0, filters) ->
 %% role, verified). No host/port/ip/pubkey/id. Banned peers excluded; deduped
 %% by name.
 init(Req0, filters_json) ->
-    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    Peers = emquest_pop:all_peers_safe(),
     Pub   = [filter_public_json(P) || P <- Peers,
              maps:get(name, P, <<>>) =/= <<>>, not peer_banned(P)],
     Uniq  = maps:values(lists:foldl(
@@ -134,25 +134,16 @@ init(Req0, filters_json) ->
 
 init(Req0, network_peers) ->
     %% Topology leak surface — require an admin token (same as /admin).
-    case admin_auth(Req0) of
-        {ok, _Name} ->
-            Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
-            PeerList = [begin
-                H    = maps:get(host,       P, <<"unknown">>),
-                QP   = maps:get(query_port, P, undefined),
-                Name = maps:get(name,       P, <<>>),
-                #{<<"host">>       => H,
-                  <<"name">>       => Name,
-                  <<"query_port">> => case QP of undefined -> null; _ -> QP end,
-                  <<"routable">>   => QP =/= undefined}
-            end || P <- Peers],
-            Body = iolist_to_binary(json:encode(PeerList)),
-            {ok, cowboy_req:reply(200, #{
-                <<"content-type">>  => <<"application/json">>,
-                <<"cache-control">> => <<"no-cache">>
-            }, Body, Req0), network_peers};
-        _ -> {ok, unauthorized(Req0), network_peers}
-    end;
+    with_admin(Req0, network_peers, fun(_Name) ->
+        PeerList = [begin
+            QP = maps:get(query_port, P, undefined),
+            #{<<"host">>       => maps:get(host, P, <<"unknown">>),
+              <<"name">>       => maps:get(name, P, <<>>),
+              <<"query_port">> => case QP of undefined -> null; _ -> QP end,
+              <<"routable">>   => QP =/= undefined}
+        end || P <- emquest_pop:all_peers_safe()],
+        json_nc(Req0, 200, PeerList)
+    end);
 
 init(Req0, health) ->
     Peers = emquest_health:status(),
@@ -205,12 +196,7 @@ init(Req0, query) ->
 %% only images, handled by velora.
 init(Req0, media) ->
     case cowboy_req:method(Req0) of
-        <<"POST">> ->
-            CT = cowboy_req:header(<<"content-type">>, Req0, <<>>),
-            case binary:match(CT, <<"multipart/form-data">>) of
-                nomatch -> media_url(Req0);
-                _       -> media_upload(Req0)
-            end;
+        <<"POST">> -> emquest_media:media_post(Req0);
         _ ->
             {ok, cowboy_req:reply(405,
                 #{<<"content-type">> => <<"application/json">>},
@@ -220,18 +206,17 @@ init(Req0, media) ->
 %% poll here (same origin) instead of us blocking the /media request open for the
 %% whole warp. Returns {status:processing} | a done raster card | {status:error}.
 init(Req0, media_prepare) ->
-    Id = cowboy_req:binding(id, Req0),
-    {Code, Body} = velora_prepare_poll(Id),
-    {ok, cowboy_req:reply(Code, media_ct(), json:encode(Body), Req0), media_prepare};
+    emquest_media:prepare(Req0, cowboy_req:binding(id, Req0));
 init(Req0, stt) ->
     case cowboy_req:method(Req0) of
         <<"POST">> ->
             case emquest_ratelimit:allow(client_ip(Req0), 5, 60) of
                 false -> too_many(Req0, stt);
-                true  -> stt_do(Req0)
+                true  -> emquest_media:stt_do(Req0)
             end;
         _ ->
-            {ok, cowboy_req:reply(405, media_ct(),
+            {ok, cowboy_req:reply(405,
+                #{<<"content-type">> => <<"application/json">>},
                 <<"{\"error\":\"Use POST\"}">>, Req0), stt}
     end;
 
@@ -247,52 +232,38 @@ init(Req0, admin_index) ->
 %% /admin/me — returns the authenticated admin's name (for the UI to greet
 %% + auto-recognize a returning admin whose token is already in IndexedDB).
 init(Req0, admin_me) ->
-    case admin_auth(Req0) of
-        {ok, Name} ->
-            {ok, cowboy_req:reply(200,
-                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
-                iolist_to_binary(json:encode(#{<<"name">> => Name})), Req0), admin_me};
-        _ -> {ok, unauthorized(Req0), admin_me}
-    end;
+    with_admin(Req0, admin_me, fun(Name) ->
+        json_nc(Req0, 200, #{<<"name">> => Name})
+    end);
 
 %% /admin/nav — gated HTML fragment: the admin-only nav links. Returned ONLY to
 %% an authenticated admin, so the public page source never contains them; the JS
 %% injects the result into the header. (The endpoints themselves are the real
 %% gate; this just avoids advertising the admin surface in the static HTML.)
 init(Req0, admin_nav) ->
-    case admin_auth(Req0) of
-        {ok, _Name} ->
-            Frag = unicode:characters_to_binary(
-                     "<a href=\"/network\" class=\"network-link\">network \x{2197}</a>"
-                     "<a href=\"/admin\" class=\"network-link\">admin \x{2197}</a>"),
-            {ok, cowboy_req:reply(200,
-                #{<<"content-type">> => <<"text/html; charset=utf-8">>, <<"cache-control">> => <<"no-cache">>},
-                Frag, Req0), admin_nav};
-        _ -> {ok, unauthorized(Req0), admin_nav}
-    end;
+    with_admin(Req0, admin_nav, fun(_Name) ->
+        Frag = unicode:characters_to_binary(
+                 "<a href=\"/network\" class=\"network-link\">network \x{2197}</a>"
+                 "<a href=\"/admin\" class=\"network-link\">admin \x{2197}</a>"),
+        cowboy_req:reply(200,
+            #{<<"content-type">> => <<"text/html; charset=utf-8">>,
+              <<"cache-control">> => <<"no-cache">>},
+            Frag, Req0)
+    end);
 
 %% /admin/peers — gated JSON peer list with trust tier + banned flag.
 init(Req0, admin_peers) ->
-    case admin_auth(Req0) of
-        {ok, _Name} ->
-            Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
-            List = [peer_admin_json(P) || P <- Peers],
-            {ok, cowboy_req:reply(200,
-                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
-                iolist_to_binary(json:encode(List)), Req0), admin_peers};
-        _ -> {ok, unauthorized(Req0), admin_peers}
-    end;
+    with_admin(Req0, admin_peers, fun(_Name) ->
+        List = [peer_admin_json(P) || P <- emquest_pop:all_peers_safe()],
+        json_nc(Req0, 200, List)
+    end);
 
 %% /admin/reports - gated JSON: filters by report count (moderation queue).
 init(Req0, admin_reports) ->
-    case admin_auth(Req0) of
-        {ok, _Name} ->
-            Top = try emquest_reports:top(100) catch _:_ -> [] end,
-            {ok, cowboy_req:reply(200,
-                #{<<"content-type">> => <<"application/json">>, <<"cache-control">> => <<"no-cache">>},
-                iolist_to_binary(json:encode(Top)), Req0), admin_reports};
-        _ -> {ok, unauthorized(Req0), admin_reports}
-    end;
+    with_admin(Req0, admin_reports, fun(_Name) ->
+        Top = try emquest_reports:top(100) catch _:_ -> [] end,
+        json_nc(Req0, 200, Top)
+    end);
 
 %% /report - public: a viewer flags a bad result from a filter. Rate-limited.
 init(Req0, report) ->
@@ -318,227 +289,6 @@ init(Req0, report) ->
 init(Req0, admin_ban)   -> admin_action(Req0, ban);
 init(Req0, admin_unban) -> admin_action(Req0, unban);
 init(Req0, admin_trust) -> admin_action(Req0, trust).
-
-stt_do(Req0) ->
-    case read_upload(Req0) of
-        {ok, _Filename, Bytes, Req1} ->
-            case stt_forward(<<"audio.wav">>, Bytes) of
-                {ok, Text} ->
-                    {ok, cowboy_req:reply(200, media_ct(),
-                        json:encode(#{<<"text">> => Text}), Req1), stt};
-                {error, Reason} ->
-                    {ok, cowboy_req:reply(502, media_ct(),
-                        json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
-            end;
-        {error, Reason, Req1} ->
-            {ok, cowboy_req:reply(400, media_ct(),
-                json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
-    end.
-
-%%====================================================================
-%% Media (image -> velora)
-%%====================================================================
-
-media_upload(Req0) ->
-    case read_upload(Req0) of
-        {ok, Filename, Bytes, Req1} ->
-            case is_image_ext(Filename) of
-                true  -> media_result(Req1, velora_upload_render(Filename, Bytes));
-                false -> media_unsupported(Req1)
-            end;
-        {error, Reason, Req1} ->
-            media_err(Req1, 400, Reason)
-    end.
-
-media_url(Req0) ->
-    {ok, Body, Req1} = cowboy_req:read_body(Req0),
-    case (try json:decode(Body) catch _:_ -> #{} end) of
-        #{<<"url">> := Url} when is_binary(Url) ->
-            case is_image_ext(Url) of
-                true  -> media_result(Req1, fetch_url_render(Url));
-                false -> media_unsupported(Req1)
-            end;
-        _ -> media_err(Req1, 400, missing_url)
-    end.
-
-%% velora's warp is asynchronous: answer the browser right away with a poll URL
-%% (served here at /media/prepare/:id) instead of blocking this request for the
-%% whole render. A legacy synchronous velora still yields a ready card.
-media_result(Req, {ok, {processing, PrepId}}) ->
-    Body = #{<<"status">> => <<"processing">>,
-             <<"prepare">> => PrepId,
-             <<"poll">> => <<"/media/prepare/", PrepId/binary>>},
-    {ok, cowboy_req:reply(202, media_ct(), json:encode(Body), Req), media};
-media_result(Req, {ok, {ready, Card}}) ->
-    {ok, cowboy_req:reply(200, media_ct(), json:encode(Card), Req), media};
-media_result(Req, {error, Reason}) -> media_err(Req, 502, Reason).
-
-media_unsupported(Req) ->
-    {ok, cowboy_req:reply(415, media_ct(),
-        json:encode(#{<<"error">> => <<"only images are supported for now">>}), Req), media}.
-
-media_err(Req, Code, Reason) ->
-    {ok, cowboy_req:reply(Code, media_ct(),
-        json:encode(#{<<"error">> => media_ebin(Reason)}), Req), media}.
-
-media_ct() -> #{<<"content-type">> => <<"application/json">>}.
-media_ebin(B) when is_binary(B) -> B;
-media_ebin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
-
-stt_base() -> application:get_env(emquest, stt_url, "http://127.0.0.1:8086").
-
-stt_forward(Filename, Bytes) ->
-    {Boundary, MBody} = build_stt_multipart(Filename, Bytes),
-    CT = "multipart/form-data; boundary=" ++ Boundary,
-    case httpc:request(post,
-                       {stt_base() ++ "/inference", [], CT, MBody},
-                       [{timeout, 30000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _Hdrs, Body}} -> {ok, parse_stt_text(Body)};
-        {ok, {{_, Code, _}, _, _}}        -> {error, iolist_to_binary(io_lib:format("stt ~w", [Code]))};
-        {error, R}                        -> {error, R}
-    end.
-
-%% whisper.cpp /inference returns {"text": "..."}.
-parse_stt_text(Body) ->
-    case (try json:decode(Body) catch _:_ -> #{} end) of
-        #{<<"text">> := T} when is_binary(T) -> string:trim(T);
-        _ -> <<>>
-    end.
-
-build_stt_multipart(Filename, Bytes) ->
-    Boundary = "emqstt" ++ integer_to_list(erlang:unique_integer([positive])),
-    Body = iolist_to_binary([
-        "--", Boundary, "\r\n",
-        "Content-Disposition: form-data; name=\"file\"; filename=\"", Filename, "\"\r\n",
-        "Content-Type: audio/wav\r\n\r\n",
-        Bytes, "\r\n",
-        "--", Boundary, "--\r\n"]),
-    {Boundary, Body}.
-
-%% Read the first multipart file part; returns {ok, Filename, Bytes, Req}.
-read_upload(Req0) ->
-    case cowboy_req:read_part(Req0) of
-        {ok, Headers, Req1} ->
-            case cow_multipart:form_data(Headers) of
-                {file, _Field, Filename, _CType} ->
-                    {Bytes, Req2} = read_part_all(Req1, <<>>),
-                    {ok, Filename, Bytes, Req2};
-                _ ->
-                    {_, Req2} = read_part_all(Req1, <<>>),
-                    read_upload(Req2)
-            end;
-        {done, Req1} -> {error, no_file, Req1}
-    end.
-
-read_part_all(Req0, Acc) ->
-    case cowboy_req:read_part_body(Req0) of
-        {ok, Data, Req1}   -> {<<Acc/binary, Data/binary>>, Req1};
-        {more, Data, Req1} -> read_part_all(Req1, <<Acc/binary, Data/binary>>)
-    end.
-
-is_image_ext(Bin) ->
-    L = string:lowercase(iolist_to_binary(Bin)),
-    lists:any(fun(Ext) -> binary:match(L, Ext) =/= nomatch end,
-              [<<".jpg">>, <<".jpeg">>, <<".png">>, <<".webp">>, <<".gif">>,
-               <<".tif">>, <<".tiff">>, <<".jp2">>, <<".bmp">>]).
-
-velora_base() -> application:get_env(emquest, velora_url, "http://localhost:8081").
-tiles_base()  -> list_to_binary(application:get_env(emquest, velora_tiles_base, "https://velora.roques.me")).
-
-%% File path: upload to velora, render, build an absolute-tiles raster card.
-velora_upload_render(Filename, Bytes) ->
-    {Boundary, MBody} = build_multipart(Filename, Bytes),
-    UpCT = "multipart/form-data; boundary=" ++ Boundary,
-    case httpc:request(post, {velora_base() ++ "/uploads", [], UpCT, MBody},
-                       [{timeout, 30000}], [{body_format, binary}]) of
-        {ok, {{_, S, _}, _, UpResp}} when S =:= 200; S =:= 201 ->
-            case (try json:decode(UpResp) catch _:_ -> #{} end) of
-                #{<<"uri">> := Uri} -> velora_render(Uri);
-                _ -> {error, bad_upload_response}
-            end;
-        {ok, {{_, C, _}, _, _}} -> {error, {upload_http, C}};
-        {error, R} -> {error, R}
-    end.
-
-%% Kick off velora's async warp. /render answers 202 {status:processing, prepare}
-%% instantly (the warp is backgrounded), so this returns the prepare id for the
-%% browser to poll — it does NOT block on the render. A legacy synchronous velora
-%% (a ready {id,...}) still yields a ready card.
-velora_render(Uri) ->
-    RBody = iolist_to_binary(json:encode(#{<<"uri">> => Uri})),
-    case httpc:request(post, {velora_base() ++ "/render",
-                              [{"content-type", "application/json"}],
-                              "application/json", RBody},
-                       [{timeout, 15000}], [{body_format, binary}]) of
-        {ok, {{_, S, _}, _, Resp}} when S =:= 200; S =:= 202 ->
-            case json:decode(Resp) of
-                #{<<"status">> := <<"processing">>, <<"prepare">> := P} ->
-                    {ok, {processing, P}};
-                #{<<"id">> := _} = M -> {ok, {ready, render_card(M)}}
-            end;
-        {ok, {{_, C, _}, _, _}} -> {error, {render_http, C}};
-        {error, R} -> {error, R}
-    end.
-
-%% One poll of velora's async prepare, proxied for /media/prepare/:id. Maps
-%% velora's /prepare/:id answer to {HttpCode, JsonBody} for the browser.
-velora_prepare_poll(Id) ->
-    Url = velora_base() ++ "/prepare/" ++ binary_to_list(Id),
-    case httpc:request(get, {Url, []}, [{timeout, 15000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _, B}} ->
-            case (try json:decode(B) catch _:_ -> #{} end) of
-                #{<<"status">> := <<"done">>} = D ->
-                    {200, (render_card(D))#{<<"status">> => <<"done">>}};
-                #{<<"status">> := <<"error">>} = E ->
-                    {200, #{<<"status">> => <<"error">>,
-                            <<"error">> => media_ebin(maps:get(<<"error">>, E, <<"error">>))}};
-                _ ->
-                    {200, #{<<"status">> => <<"processing">>}}
-            end;
-        {ok, {{_, 404, _}, _, _}} -> {404, #{<<"status">> => <<"not_found">>}};
-        {ok, {{_, C, _}, _, _}}   -> {502, #{<<"error">> => media_ebin({prepare_http, C})}};
-        {error, R}                -> {502, #{<<"error">> => media_ebin(R)}}
-    end.
-
-render_card(M) ->
-    Id = maps:get(<<"id">>, M),
-    NZ = maps:get(<<"maxNativeZoom">>, M, 19),
-    #{<<"type">> => <<"raster">>, <<"id">> => Id,
-      <<"bounds">> => maps:get(<<"bounds">>, M, null),
-      <<"maxNativeZoom">> => NZ,
-      <<"tiles">> => <<(tiles_base())/binary, "/tiles/", Id/binary, "/{z}/{x}/{y}">>}.
-
-%% URL path: Emquest fetches the image itself (a normal GET works with hosts that
-%% reject GDAL's /vsicurl Range requests, e.g. Wikimedia), then uploads the bytes
-%% to velora — the same path as a file upload. Avoids /vsicurl entirely.
-fetch_url_render(Url) ->
-    case fetch_image(Url) of
-        {ok, Bytes} -> velora_upload_render(url_filename(Url), Bytes);
-        {error, R}  -> {error, R}
-    end.
-
-fetch_image(Url) ->
-    _ = application:ensure_all_started(ssl),
-    emquest_safeurl:safe_get(Url,
-        [{"User-Agent", "velora/1.0"}, {"accept", "image/*"}],
-        [{timeout, 30000}]).
-
-url_filename(Url) ->
-    Path = case binary:split(Url, <<"?">>) of [P | _] -> P; _ -> Url end,
-    case binary:split(Path, <<"/">>, [global, trim_all]) of
-        [] -> <<"image">>;
-        Ps -> lists:last(Ps)
-    end.
-
-build_multipart(Filename, Bytes) ->
-    B  = "----emq" ++ integer_to_list(erlang:unique_integer([positive])),
-    FN = binary_to_list(iolist_to_binary(Filename)),
-    Body = iolist_to_binary([
-        "--", B, "\r\n",
-        "Content-Disposition: form-data; name=\"file\"; filename=\"", FN, "\"\r\n",
-        "Content-Type: application/octet-stream\r\n\r\n",
-        Bytes, "\r\n", "--", B, "--\r\n"]),
-    {B, Body}.
 
 %%====================================================================
 %% Pipeline
@@ -694,11 +444,7 @@ apply_mmr(Sids, Emb) when map_size(Emb) > 0, is_list(Sids) ->
 apply_mmr(Sids, _Emb) -> Sids.
 
 %% @private [rank] mmr on/off, default on.
-mmr_on() ->
-    case maps:get("mmr", emquest_rank:conf(), "on") of
-        "off" -> false;
-        _     -> true
-    end.
+mmr_on() -> emconf:get_bool("rank", "mmr", true).
 
 %% @private
 %% @doc Replay a cached, final-ordered item list as the SSE stream a
@@ -796,11 +542,7 @@ maybe_progressive(Req, Acc, Query, QVec, LastEmit, Now) ->
     end.
 
 %% @private [rank] progressive on/off, default on.
-progressive_on() ->
-    case maps:get("progressive", emquest_rank:conf(), "on") of
-        "off" -> false;
-        _     -> true
-    end.
+progressive_on() -> emconf:get_bool("rank", "progressive", true).
 
 %%====================================================================
 %% Aggregation — occurrence count + Reciprocal Rank Fusion
@@ -1031,7 +773,7 @@ relay_hub_http_port() ->
 %% (unknown/unreachable relay_via — caller treats this as a peer error).
 -spec find_relay_hub(binary()) -> map() | undefined.
 find_relay_hub(RelayViaId) when is_binary(RelayViaId) ->
-    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    Peers = emquest_pop:all_peers_safe(),
     case [P || P <- Peers, maps:get(id, P, undefined) =:= RelayViaId] of
         [Hub | _] -> Hub;
         []        -> undefined
@@ -1115,21 +857,7 @@ decode_b64(_) -> error.
 %% peer set, so a plain query like "f40" also reaches them. Deduplicated by
 %% endpoint; media filters already selected are not added twice.
 ensure_media_peers(Selected) ->
-    Always = [<<"openverse_filter">>, <<"wikimedia_commons_filter">>,
-              <<"nasa_images_filter">>,
-              <<"sepiasearch_filter">>,
-              <<"cleveland_filter">>, <<"gbif_filter">>, <<"met_filter">>],
-    SelKeys = [endpoint_key(P) || {P, _} <- Selected],
-    All = try emquest_pop:all_peers() catch _:_ -> [] end,
-    Extra = [{P, 1.0}
-             || P <- All,
-                lists:member(maps:get(name, P, <<>>), Always),
-                maps:get(query_port, P, undefined) =/= undefined,
-                not lists:member(endpoint_key(P), SelKeys)],
-    Selected ++ Extra.
-
-endpoint_key(P) ->
-    {maps:get(host, P, undefined), maps:get(query_port, P, undefined)}.
+    agent_router:with_media(Selected, emquest_pop:all_peers_safe()).
 
 -spec spawn_pop_workers([binary()], [{map(), float()}], pid()) -> [pid()].
 spawn_pop_workers(SubQueries, Peers, Parent) ->
@@ -1228,156 +956,6 @@ decode_relay_via(B) when is_binary(B) ->
 %% (item_vec_score/dot_product moved into emquest_rank as hash_vec/dot_prod)
 
 %%====================================================================
-%% Preview fetch
-%%====================================================================
-
-%% @doc Fetch a URL and extract a meaningful description for drift cards.
-%%
-%% Two-pass strategy:
-%%   Pass 1 — meta tags: og:description, then meta name=description.
-%%            Fast; present on most sites but often short or SEO-y.
-%%   Pass 2 — body text: concatenate <p> content found inside <article>,
-%%            <main>, or anywhere if neither is present. Strips inline tags.
-%%            Slower but captures the real article intro.
-%%
-%% The result with the higher "substance score" (length × non-fluff bonus)
-%% is returned, truncated to 320 chars.  Times out in 5 s.
-%% @end
--spec fetch_preview(binary()) -> {ok, binary()} | {error, term()}.
-fetch_preview(<<>>) -> {error, empty_url};
-fetch_preview(Url) ->
-    case emquest_safeurl:safe_get(Url,
-             [{"User-Agent", "Mozilla/5.0 (compatible; Emquest/1.0)"}],
-             [{timeout, 5000}]) of
-        {ok, Body} -> {ok, best_description(Body)};
-        {error, R} -> {error, R}
-    end.
-
-%% @private
-%% @doc Pick the more informative of the meta description and the body text.
-%% @end
--spec best_description(binary()) -> binary().
-best_description(Html) ->
-    Meta = extract_meta(Html),
-    Body = extract_body_text(Html),
-    case substance_score(Meta) >= substance_score(Body) of
-        true  -> truncate(Meta, 320);
-        false -> truncate(Body, 320)
-    end.
-
-%% @private
-%% @doc Score a candidate description by length, penalising SEO fluff.
-%%
-%% Short texts (<60 chars) score 0 so the other candidate wins by default.
-%% Common SEO phrases (discover, learn more, click here…) reduce the score.
-%% @end
--spec substance_score(binary()) -> non_neg_integer().
-substance_score(<<>>) -> 0;
-substance_score(B) ->
-    Len = byte_size(B),
-    case Len < 60 of
-        true  -> 0;
-        false ->
-            Lower = string:lowercase(binary_to_list(B)),
-            FluffPhrases = ["discover", "learn more", "click here",
-                            "sign up", "subscribe", "cookie", "privacy policy",
-                            "all rights reserved", "©"],
-            Penalty = lists:sum([5 || P <- FluffPhrases,
-                                      string:find(Lower, P) =/= nomatch]),
-            max(0, Len - Penalty * 10)
-    end.
-
-%% @private
-%% @doc Extract og:description or meta name=description from <head>.
-%% @end
--spec extract_meta(binary()) -> binary().
-extract_meta(Html) ->
-    Patterns = [
-        <<"property=[\"']og:description[\"'][^>]*content=[\"']([^\"']{20,})[\"']">>,
-        <<"content=[\"']([^\"']{20,})[\"'][^>]*property=[\"']og:description[\"']">>,
-        <<"name=[\"']description[\"'][^>]*content=[\"']([^\"']{20,})[\"']">>,
-        <<"content=[\"']([^\"']{20,})[\"'][^>]*name=[\"']description[\"']">>
-    ],
-    extract_first_match(Html, Patterns).
-
-%% @private
-%% @doc Extract and join leading paragraph text from <article> or <main>.
-%%
-%% Falls back to any <p> tags in the document if neither landmark is found.
-%% Strips inline HTML tags from each paragraph before joining.
-%% @end
--spec extract_body_text(binary()) -> binary().
-extract_body_text(Html) ->
-    %% Prefer semantic landmarks; fall back to full document.
-    Region = case extract_region(Html, <<"article">>) of
-        <<>> -> case extract_region(Html, <<"main">>) of
-            <<>> -> Html;
-            M    -> M
-        end;
-        A -> A
-    end,
-    Paragraphs = extract_paragraphs(Region),
-    join_paragraphs(Paragraphs, <<>>, 0).
-
-%% @private Extract the inner HTML of the first <Tag>…</Tag> block.
--spec extract_region(binary(), binary()) -> binary().
-extract_region(Html, Tag) ->
-    Pat = <<"<", Tag/binary, "[^>]*>([\\s\\S]*?)</", Tag/binary, ">">>,
-    case re:run(Html, Pat, [{capture, [1], binary}, caseless]) of
-        {match, [M]} -> M;
-        _            -> <<>>
-    end.
-
-%% @private Extract text content from all <p> tags, stripping inline tags.
--spec extract_paragraphs(binary()) -> [binary()].
-extract_paragraphs(Html) ->
-    case re:run(Html, <<"<p[^>]*>([\\s\\S]*?)</p>">>,
-                [global, {capture, [1], binary}, caseless]) of
-        {match, Groups} ->
-            [strip_tags(trim_ws(P)) || [P] <- Groups,
-             byte_size(trim_ws(P)) > 40];
-        _ -> []
-    end.
-
-%% @private Join paragraphs with a space until we have enough text.
--spec join_paragraphs([binary()], binary(), non_neg_integer()) -> binary().
-join_paragraphs([], Acc, _) -> Acc;
-join_paragraphs(_, Acc, N) when N >= 3 -> Acc;
-join_paragraphs([P | Rest], <<>>, N) ->
-    join_paragraphs(Rest, P, N + 1);
-join_paragraphs([P | Rest], Acc, N) ->
-    join_paragraphs(Rest, <<Acc/binary, " ", P/binary>>, N + 1).
-
-%% @private Remove all HTML tags from a binary, collapsing whitespace.
--spec strip_tags(binary()) -> binary().
-strip_tags(B) ->
-    NoTags = re:replace(B, <<"<[^>]+>">>, <<" ">>, [global, {return, binary}]),
-    Collapsed = re:replace(NoTags, <<"\\s+">>, <<" ">>, [global, {return, binary}]),
-    trim_ws(Collapsed).
-
-%% @private Return the first match from a list of regex patterns.
--spec extract_first_match(binary(), [binary()]) -> binary().
-extract_first_match(_Html, []) -> <<>>;
-extract_first_match(Html, [Pat | Rest]) ->
-    case re:run(Html, Pat, [{capture, [1], binary}, caseless]) of
-        {match, [M]} ->
-            Trimmed = trim_ws(M),
-            case byte_size(Trimmed) > 20 of
-                true  -> Trimmed;
-                false -> extract_first_match(Html, Rest)
-            end;
-        _ -> extract_first_match(Html, Rest)
-    end.
-
-trim_ws(B) ->
-    re:replace(B, <<"^\\s+|\\s+$">>, <<>>, [global, {return, binary}]).
-
-truncate(B, Max) when byte_size(B) =< Max -> B;
-truncate(B, Max) ->
-    <<Prefix:Max/binary, _/binary>> = B,
-    <<Prefix/binary, "…">>.
-
-%%====================================================================
 %% SSE helpers
 %%====================================================================
 
@@ -1424,6 +1002,22 @@ admin_auth(Req) ->
               _ -> undefined
           end,
     emquest_admin:authenticate(Tok, client_ip(Req)).
+
+%% @private Run `Fun(Name)' for an authenticated admin (it returns the
+%% replied Req), else answer 401. Collapses the identical auth gate that
+%% every gated admin route used to inline. `Tag' is the Cowboy state.
+with_admin(Req, Tag, Fun) ->
+    case admin_auth(Req) of
+        {ok, Name} -> {ok, Fun(Name), Tag};
+        _          -> {ok, unauthorized(Req), Tag}
+    end.
+
+%% @private No-cache JSON reply, returning the replied Req.
+json_nc(Req, Code, Term) ->
+    cowboy_req:reply(Code,
+        #{<<"content-type">> => <<"application/json">>,
+          <<"cache-control">> => <<"no-cache">>},
+        iolist_to_binary(json:encode(Term)), Req).
 
 %% @private 401 JSON reply for a missing/invalid admin token.
 unauthorized(Req) ->
@@ -1528,23 +1122,19 @@ too_many(Req, Tag) ->
           <<"retry-after">>  => <<"10">>},
         <<"{\"error\":\"rate limited\"}">>, Req), Tag}.
 
-%% @doc Response headers for HTML pages: strict CSP + hardening.
-%% `img-src` allows self + https (peer thumbnails are proxied/https only);
-%% no inline or third-party script is permitted beyond what `ExtraScriptSrc'
-%% (see `app_script_extra/0') explicitly allows. `style-src'/`font-src' carry
-%% an explicit allowance for fonts.googleapis.com/fonts.gstatic.com because
-%% every template (index/drift/network) links Google Fonts — without it the
-%% base policy would silently break font loading on every HTML page.
+%% @doc Response headers for HTML pages: strict CSP + hardening. No inline
+%% or third-party script is permitted (`script-src 'self''). `style-src'/
+%% `font-src' carry an explicit allowance for fonts.googleapis.com/
+%% fonts.gstatic.com because every template (index/drift/network) links
+%% Google Fonts — without it the base policy would silently break font
+%% loading on every HTML page. The search page uses the looser
+%% {@link security_headers_app/1} instead (on-device SLM).
 -spec security_headers(binary()) -> map().
-security_headers(ContentType) -> security_headers(ContentType, <<>>).
-
--spec security_headers(binary(), binary()) -> map().
-security_headers(ContentType, ExtraScriptSrc) ->
-    ScriptSrc = <<"script-src 'self'", ExtraScriptSrc/binary>>,
+security_headers(ContentType) ->
     #{<<"content-type">>            => ContentType,
       <<"content-security-policy">> =>
-          <<"default-src 'self'; ", ScriptSrc/binary,
-            "; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+          <<"default-src 'self'; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
             "img-src 'self' https: data:; media-src 'self' https:; "
             "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,

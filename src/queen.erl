@@ -180,21 +180,7 @@ pop_seeds() ->
 %%--------------------------------------------------------------------
 -spec emquest_pop_port() -> pos_integer().
 emquest_pop_port() ->
-    case conf_path() of
-        undefined ->
-            9100;
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} ->
-                    Section = maps:get("emquest", parse_conf(Bin), #{}),
-                    case maps:get("pop_port", Section, undefined) of
-                        undefined -> 9100;
-                        PortStr   -> list_to_integer(string:trim(PortStr))
-                    end;
-                _ ->
-                    9100
-            end
-    end.
+    emconf:get_int("emquest", "pop_port", 9100).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -311,14 +297,7 @@ fetch_registry(Url) ->
 %%====================================================================
 
 read_disco_conf() ->
-    case conf_path() of
-        undefined -> #{};
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} -> maps:get("em_disco", parse_conf(Bin), #{});
-                _         -> #{}
-            end
-    end.
+    emconf:section("em_disco").
 
 -spec conf_path() -> string() | undefined.
 conf_path() ->

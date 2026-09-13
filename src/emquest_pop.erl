@@ -35,7 +35,7 @@
 -behaviour(gen_server).
 -include_lib("kernel/include/logger.hrl").
 
--export([start_link/0, peers_for_query/2, all_peers/0]).
+-export([start_link/0, peers_for_query/2, all_peers/0, all_peers_safe/0]).
 -export([ban/2, unban/1, set_trust/2]).
 -export([credit/1, penalize/1]).
 -export([node_opts_for_test/0]).
@@ -84,6 +84,13 @@ peers_for_query(QueryVec, K) ->
 -spec all_peers() -> [map()].
 all_peers() ->
     gen_server:call(?MODULE, all_peers, 5_000).
+
+%% @doc Like `all_peers/0' but never raises — returns `[]' when the
+%% node is not started / the call times out. The form every caller
+%% (handler, health, router) used to wrap in its own try/catch.
+-spec all_peers_safe() -> [map()].
+all_peers_safe() ->
+    try all_peers() catch _:_ -> [] end.
 
 %%--------------------------------------------------------------------
 %% @doc Ban a peer: evict it immediately and persist the ban.

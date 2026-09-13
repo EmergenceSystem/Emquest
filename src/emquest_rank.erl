@@ -8,7 +8,7 @@
 -module(emquest_rank).
 
 -export([normalize/1, words/1, lex_score/3, rank/3, mmr/3,
-         weights/0, phrase_boost/0, mmr_lambda/0, conf/0]).
+         weights/0, phrase_boost/0, mmr_lambda/0]).
 
 %% @doc Lowercase + collapse whitespace + trim.
 -spec normalize(binary()) -> binary().
@@ -106,14 +106,8 @@ hash_vec(QueryVec, Item) ->
                   is_binary(V), byte_size(V) > 0],
     case Words of
         [] -> 0.0;
-        _  -> dot_prod(QueryVec, em_filter_vec:from_capabilities(Words))
+        _  -> em_vec:dot_f32(QueryVec, em_filter_vec:from_capabilities(Words))
     end.
-
-%% @private dot product of two f32 little-endian unit vectors (= cosine).
-dot_prod(A, B) ->
-    FA = [F || <<F:32/float-little>> <= A],
-    FB = [F || <<F:32/float-little>> <= B],
-    lists:foldl(fun({X, Y}, Acc) -> Acc + X * Y end, 0.0, lists:zip(FA, FB)).
 
 %% @private source authority: occurrence + trust-RRF + sub-query coverage.
 auth(Group) ->
@@ -139,38 +133,14 @@ minmax(Xs) ->
         false -> fun(_) -> 0.0 end
     end.
 
-%% @doc [rank] section of emergence.conf as #{string() => string()}.
-conf() ->
-    case queen:conf_path() of
-        undefined -> #{};
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} -> maps:get("rank", queen:parse_conf(Bin), #{});
-                _         -> #{}
-            end
-    end.
-
 weights() ->
-    {fl("wL", 0.6), fl("wV", 0.25), fl("wA", 0.15)}.
+    {emconf:get_float("rank", "wL", 0.6),
+     emconf:get_float("rank", "wV", 0.25),
+     emconf:get_float("rank", "wA", 0.15)}.
 
-phrase_boost() -> fl("phrase_boost", 0.5).
+phrase_boost() -> emconf:get_float("rank", "phrase_boost", 0.5).
 
-mmr_lambda() -> fl("mmr_lambda", 0.7).
-
-%% @private float from [rank] key with default.
-fl(Key, Default) ->
-    case maps:get(Key, conf(), undefined) of
-        undefined -> Default;
-        V when is_list(V) ->
-            case string:to_float(V) of
-                {F, _} when is_float(F) -> F;
-                _ -> case string:to_integer(V) of
-                         {I, _} when is_integer(I) -> float(I);
-                         _ -> Default
-                     end
-            end;
-        _ -> Default
-    end.
+mmr_lambda() -> emconf:get_float("rank", "mmr_lambda", 0.7).
 
 %% @doc Reorder an already relevance-ranked sid list by Maximal Marginal
 %% Relevance. Relevance is derived from input position (rank 1 highest);
@@ -195,7 +165,7 @@ max_sim(S, Picked, Emb) ->
     case maps:get(S, Emb, undefined) of
         undefined -> 0.0;
         V ->
-            Sims = [agent_dedup:cosine(V, PV)
+            Sims = [em_vec:cosine(V, PV)
                     || P <- Picked, (PV = maps:get(P, Emb, undefined)) =/= undefined],
             lists:max([0.0 | Sims])
     end.

@@ -45,10 +45,6 @@ verify_selfsig(#{pubkey := Pub, sig := Sig} = M) when is_binary(Pub), is_binary(
     IdOk andalso verify(canonical_identity(M), Sig, Pub);
 verify_selfsig(_) -> false.
 
-qp(undefined) -> 0;
-qp(N) when is_integer(N) -> N;
-qp(_) -> 0.
-
 to_bin(B) when is_binary(B) -> B;
 to_bin(L) when is_list(L)   -> iolist_to_binary(L);
 to_bin(_) -> <<>>.

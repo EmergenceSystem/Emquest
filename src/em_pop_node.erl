@@ -747,30 +747,10 @@ upsert_peer_ok(#peer{id = Id} = New,
 
 %%--------------------------------------------------------------------
 %% @private
-%% @doc Decrease the trust score of a peer after a failed exchange.
-%%
-%% The score is floored at TRUST_MIN (0.0) and the peer stays in the
-%% table.  Only stale eviction (see `cleanup_stale/2') removes peers.
-%% @end
-%%--------------------------------------------------------------------
--spec decay_trust(binary(), #state{}) -> #state{}.
-decay_trust(PeerId, #state{peers = Peers} = State) ->
-    case maps:find(PeerId, Peers) of
-        {ok, #peer{trust = T, last_seen = LS} = Peer} ->
-            NewTrust = max(?TRUST_MIN, T - ?TRUST_DECAY),
-            catch em_pop_store:put_trust(PeerId, NewTrust, LS),
-            State#state{peers = Peers#{PeerId => Peer#peer{trust = NewTrust}}};
-        error ->
-            %% Peer disappeared between the spawn and the result — ignore.
-            State
-    end.
-
-%%--------------------------------------------------------------------
-%% @private
 %% @doc Adjust one peer's trust by Delta, clamped to [TRUST_MIN, TRUST_MAX]
 %% and write-through persisted. Used by the async `credit'/`penalize'
-%% API — the query-response counterpart to `decay_trust'/`mark_failure',
-%% which only fire on direct gossip exchanges.
+%% API — the query-response counterpart to `mark_failure', which only
+%% fires on direct gossip exchanges.
 %%
 %% Unknown peer ids are ignored (State returned unchanged): a query
 %% result can race a peer's eviction.

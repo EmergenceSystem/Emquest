@@ -64,7 +64,7 @@ handle_call(_, _, S) -> {reply, ok, S}.
 handle_cast(_, S) -> {noreply, S}.
 
 handle_info(probe, #{health := H0} = S) ->
-    Peers = try emquest_pop:all_peers() catch _:_ -> [] end,
+    Peers = emquest_pop:all_peers_safe(),
     H1 = probe_all(Peers, H0),
     erlang:send_after(?INTERVAL, self(), probe),
     {noreply, S#{health => H1}};

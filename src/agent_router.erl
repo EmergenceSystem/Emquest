@@ -29,7 +29,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([run/1]).
--export([select/2, cosine/2]).
+-export([select/2, cosine/2, with_media/2]).
 
 -define(DEFAULT_K, 12).
 -define(ALWAYS_MEDIA, [<<"openverse_filter">>, <<"wikimedia_commons_filter">>,
@@ -85,23 +85,12 @@ select(QVec, Opts) ->
     with_media(TopK, Peers).
 
 %%--------------------------------------------------------------------
-%% @doc Cosine similarity of two equal-length float vectors. Returns
-%% `0.0' on a dimension mismatch or a zero-norm vector rather than
-%% raising — routing must degrade gracefully, never crash.
+%% @doc Cosine similarity of two float vectors — see {@link em_vec:cosine/2}.
+%% Kept as a thin alias for the router's callers and tests.
 %% @end
 %%--------------------------------------------------------------------
 -spec cosine([float()], [float()]) -> float().
-cosine(A, B) when is_list(A), is_list(B), length(A) =:= length(B) ->
-    Dot = lists:sum(lists:zipwith(fun(X, Y) -> X * Y end, A, B)),
-    NA  = math:sqrt(lists:sum([X * X || X <- A])),
-    NB  = math:sqrt(lists:sum([X * X || X <- B])),
-    Denom = NA * NB,
-    if
-        Denom < 1.0e-12, Denom > -1.0e-12 -> 0.0;
-        true                              -> Dot / Denom
-    end;
-cosine(_, _) ->
-    0.0.
+cosine(A, B) -> em_vec:cosine(A, B).
 
 %%====================================================================
 %% Internal
@@ -148,19 +137,7 @@ endpoint_key(P) ->
 
 %% @private
 safe_all_peers() ->
-    try emquest_pop:all_peers()
-    catch _:_ -> []
-    end.
+    emquest_pop:all_peers_safe().
 
-%% @private
-%% @doc `[agents] router_k' from `emergence.conf', default 12.
-router_k() ->
-    case maps:get("router_k", em_agent:conf(), undefined) of
-        undefined -> ?DEFAULT_K;
-        V when is_list(V) ->
-            case string:to_integer(V) of
-                {Int, _} when is_integer(Int), Int > 0 -> Int;
-                _ -> ?DEFAULT_K
-            end;
-        _ -> ?DEFAULT_K
-    end.
+%% @private `[agents] router_k' from `emergence.conf', default 12.
+router_k() -> emconf:get_int("agents", "router_k", ?DEFAULT_K).

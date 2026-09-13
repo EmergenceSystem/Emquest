@@ -19,7 +19,7 @@
 -behaviour(em_agent).
 
 -export([run/1]).
--export([greedy_dedup/2, cosine/2]).
+-export([greedy_dedup/2]).
 
 -define(DEFAULT_WINDOW, 40).
 -define(DEFAULT_THRESHOLD, 0.90).
@@ -31,7 +31,7 @@ run(#{sortedsids := Sids, items := ItemsBySid} = Ctx)
     case Head of
         [] -> skip;
         _  ->
-            Docs = [doc_text(maps:get(S, ItemsBySid, #{})) || S <- Head],
+            Docs = [em_agent:doc_text(maps:get(S, ItemsBySid, #{})) || S <- Head],
             case em_hf:embed_many(Docs) of
                 {ok, Vecs} when length(Vecs) =:= length(Head) ->
                     Kept   = greedy_dedup(lists:zip(Head, Vecs), threshold()),
@@ -55,78 +55,24 @@ run(_) -> skip.
 greedy_dedup(Pairs, Thresh) ->
     {Kept, _} = lists:foldl(
         fun({Sid, Vec}, {KAcc, VAcc}) ->
-            case lists:any(fun(KV) -> cosine(Vec, KV) >= Thresh end, VAcc) of
+            case lists:any(fun(KV) -> em_vec:cosine(Vec, KV) >= Thresh end, VAcc) of
                 true  -> {KAcc, VAcc};
                 false -> {[Sid | KAcc], [Vec | VAcc]}
             end
         end, {[], []}, Pairs),
     lists:reverse(Kept).
 
-%%--------------------------------------------------------------------
-%% @doc Cosine similarity of two equal-length float vectors. `0.0'
-%% when either is a zero vector.
-%% @end
-%%--------------------------------------------------------------------
--spec cosine([float()], [float()]) -> float().
-cosine(A, B) ->
-    Dot = dot(A, B, 0.0),
-    Na  = math:sqrt(dot(A, A, 0.0)),
-    Nb  = math:sqrt(dot(B, B, 0.0)),
-    case Na * Nb of
-        +0.0 -> 0.0;
-        D   -> Dot / D
-    end.
-
 %%====================================================================
 %% Internal
 %%====================================================================
-
-%% @private
-dot([X | Xs], [Y | Ys], Acc) -> dot(Xs, Ys, Acc + X * Y);
-dot(_, _, Acc) -> Acc.
 
 %% @private
 split(L, N) ->
     K = min(max(N, 0), length(L)),
     lists:split(K, L).
 
-%% @private
-doc_text(Item) ->
-    Props = maps:get(<<"properties">>, Item, Item),
-    L = to_bin(maps:get(<<"title">>,  Props, maps:get(<<"label">>, Props, <<>>))),
-    V = to_bin(maps:get(<<"resume">>, Props, maps:get(<<"value">>, Props, <<>>))),
-    case V of <<>> -> L; _ -> <<L/binary, " ", V/binary>> end.
-
-%% @private
-to_bin(B) when is_binary(B) -> B;
-to_bin(_) -> <<>>.
-
 %% @private `[agents] dedup_window', default 40.
-window() -> int_conf("dedup_window", ?DEFAULT_WINDOW).
+window() -> emconf:get_int("agents", "dedup_window", ?DEFAULT_WINDOW).
 
 %% @private `[agents] dedup_threshold', default 0.90.
-threshold() -> float_conf("dedup_threshold", ?DEFAULT_THRESHOLD).
-
-%% @private
-int_conf(K, D) ->
-    case maps:get(K, em_agent:conf(), undefined) of
-        undefined -> D;
-        V when is_list(V) ->
-            case string:to_integer(V) of
-                {I, _} when is_integer(I), I > 0 -> I;
-                _ -> D
-            end;
-        _ -> D
-    end.
-
-%% @private
-float_conf(K, D) ->
-    case maps:get(K, em_agent:conf(), undefined) of
-        undefined -> D;
-        V when is_list(V) ->
-            case string:to_float(V) of
-                {F, _} when is_float(F) -> F;
-                _ -> D
-            end;
-        _ -> D
-    end.
+threshold() -> emconf:get_float("agents", "dedup_threshold", ?DEFAULT_THRESHOLD).
