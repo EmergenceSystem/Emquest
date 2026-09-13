@@ -93,11 +93,10 @@ init([]) ->
             ]),
             %% `idle_timeout' raised from cowboy's 60s default: `/query'
             %% holds the connection open (no bytes sent) while the
-            %% `rerank' phase's `agent_judge' waits on ollama to score
-            %% the top-N items — on a small local model (CPU inference)
-            %% that can take tens of seconds (see `agent_judge:judge_timeout/2').
-            %% Judge/Planner/Router each still fall back on their own
-            %% bounded timeout well under this; this only keeps the
+            %% `rerank' phase's `agent_judge' waits on the HF cross-encoder
+            %% to score the top-N items — that can take tens of seconds.
+            %% The rerank/select meta-agents each still fall back on their
+            %% own bounded timeout well under this; this only keeps the
             %% *connection* alive long enough for that fallback to
             %% reach the client instead of the socket being cut first.
             {ok, _} = cowboy:start_clear(emquest_listener,

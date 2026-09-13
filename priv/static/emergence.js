@@ -5,16 +5,17 @@
  * bottom composer. Each search is a turn: a user bubble + an assistant
  * bubble (synthesis slot + streamed result cards).
  *
- * The synthesis slot is where an LLM answer streams in once the backend
- * emits `answer` events; until then it shows a deterministic summary and
- * an "llm offline" badge.
+ * The synthesis slot is filled by the on-device SLM (see slm.js): a
+ * deterministic summary shows first and stays as the fallback, and the
+ * in-browser model streams a real summary over it when WebGPU is
+ * available (badge "llm offline" when it is not).
  *
  * Conversations persist in IndexedDB (db `emquest_chat`, separate from the
  * base `emergence`/prefs store). Only text + metadata count against the
  * memory budget — image bytes are never stored; thumbnails lazy-fetch from
  * their URL when a conversation is reopened.
  *
- * SSE events: status | item | reorder | answer | error
+ * SSE events: status | item | reorder | error
  */
 
 /* Memory budget is a single global cap for ALL conversations combined.
@@ -497,17 +498,6 @@ function handleEvent(t, event) {
             });
             applyTypeFilter();
             if (isFinal) { finishProgress(t); setTimeout(applyTypeFilter, 400); }
-            break;
-        }
-
-        /* LLM answer streaming into the synthesis slot. */
-        case 'answer': {
-            if (t.synthTextEl) {
-                t._answered = true;
-                if (t.badgeEl) t.badgeEl.remove();
-                t.synthTextEl.classList.remove('muted');
-                t.synthTextEl.textContent = event.message || '';
-            }
             break;
         }
 

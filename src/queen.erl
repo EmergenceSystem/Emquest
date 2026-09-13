@@ -1,38 +1,17 @@
 %%%-------------------------------------------------------------------
-%%% @doc LLM interface for query expansion, ranking, and synthesis.
-%%%
-%%% Provides three capabilities built on configurable LLM providers
-%%% (Mistral, Ollama, OpenAI, Claude):
+%%% @doc Query expansion and disco node resolution.
 %%%
 %%% <dl>
 %%%   <dt>`expand/1'</dt>
-%%%   <dd>Used by the default Emquest pipeline. Splits long queries
-%%%       into 2–3 focused sub-queries to improve agent recall.</dd>
+%%%   <dd>Splits a query into focused sub-queries (HF topics with a
+%%%       local keyword fallback) to improve agent recall. The only
+%%%       transformation the default Emquest pipeline applies to a
+%%%       query before fan-out.</dd>
 %%%
-%%%   <dt>`rank/2'</dt>
-%%%   <dd>Re-ranks a list of results by relevance to the original
-%%%       query. <em>Not called by the default Emquest pipeline.</em>
-%%%       Available for external clients (MCP, EmPy, custom
-%%%       integrations) that want LLM-assisted ranking.</dd>
-%%%
-%%%   <dt>`synthesize/2'</dt>
-%%%   <dd>Generates a prose answer from the top-ranked results.
-%%%       <em>Not called by the default Emquest pipeline.</em>
-%%%       Available for external clients that want a summary
-%%%       alongside raw results.</dd>
+%%%   <dt>`disco_nodes/0', `pop_seeds/0', `emquest_pop_port/0'</dt>
+%%%   <dd>Resolve em_disco HTTP base URLs and em-pop gossip seeds from
+%%%       `emergence.conf'.</dd>
 %%% </dl>
-%%%
-%%% === Configuration (`emergence.conf') ===
-%%%
-%%% ```
-%%% [llm]
-%%% provider      = mistral
-%%% model         = mistral-small-latest
-%%% temperature   = 0.3
-%%% system_prompt = You are a search assistant. Be concise.
-%%% '''
-%%%
-%%% Supported providers: `mistral', `ollama', `openai', `claude'.
 %%%
 %%% === Node URL resolution (`disco_nodes/0') ===
 %%%
@@ -60,18 +39,9 @@
 %%%-------------------------------------------------------------------
 -module(queen).
 
--export([expand/1, rank/2, synthesize/2, disco_nodes/0,
+-export([expand/1, disco_nodes/0,
          pop_seeds/0, emquest_pop_port/0,
          conf_path/0, parse_conf/1]).
-
-%% Exposed for reuse by the Planner/Judge meta-agents (`agent_planner',
-%% `agent_judge'), which need the same bounded ollama call plumbing
-%% `expand/1' and `rank/2' use internally, without duplicating it.
--export([read_llm_conf/0, handler_conf/3, llm_timeout/1,
-         call_handler/3, call_handler_timeout/4]).
-
--define(DEFAULT_SYSTEM_PROMPT,
-    "You are a search assistant. Be concise and precise.").
 
 -define(REGISTRY_CACHE, queen_registry_cache).
 
@@ -81,58 +51,18 @@
 
 %% @doc Expand a query into focused sub-queries for agent fan-out.
 %%
-%% Short queries (under 25 bytes) are returned as-is — no LLM call
-%% is made. For longer queries, the configured LLM extracts 2–3
-%% search keywords or sub-queries.
-%%
 %% The original query is always the first element of the returned
-%% list, ensuring it is always included in the fan-out regardless
-%% of what the LLM returns.
-%%
-%% This is the only `queen' function called by the default Emquest
-%% pipeline. See {@link rank/2} and {@link synthesize/2} for
-%% optional LLM capabilities available to external clients.
+%% list, ensuring it is always included in the fan-out. Expansion is
+%% HF/local only: the query is sent to the local HF topic-extraction
+%% microservice, falling back to a local keyword split when that is
+%% unavailable.
 %% @end
 -spec expand(binary()) -> [binary()].
-%% Query expansion is HF/local only (no LLM). The old LLM path asked
-%% ollama for sub-queries per query, and `call_handler_timeout/4' kills
-%% only the Erlang waiter on timeout -- ollama keeps generating the
-%% killed request server-side, starving this CPU-bound VM (slowing the
-%% hf rerank and every concurrent query). `agent_planner' is the opt-in
-%% LLM expansion slot when that trade-off is wanted.
 expand(Query) ->
     [Query | [K || K <- fallback_topics(Query), K =/= Query]].
 
-%% @private Run an LLM handler with a hard timeout so a slow or unavailable
-%% provider (e.g. ollama down) falls back to topic extraction instead of
-%% hanging the request. Returns {error, timeout} past the deadline.
--spec call_handler_timeout(binary(), binary(), map(), pos_integer()) ->
-    {ok, binary()} | {error, term()}.
-call_handler_timeout(Provider, Prompt, Conf, TimeoutMs) ->
-    Parent = self(),
-    Ref = make_ref(),
-    {Pid, MRef} = spawn_monitor(fun() ->
-        Parent ! {Ref, (catch call_handler(Provider, Prompt, Conf))}
-    end),
-    receive
-        {Ref, Res} -> erlang:demonitor(MRef, [flush]), Res;
-        {'DOWN', MRef, _, _, Reason} -> {error, Reason}
-    after TimeoutMs ->
-        exit(Pid, kill), erlang:demonitor(MRef, [flush]), {error, timeout}
-    end.
-
-%% @private LLM call timeout in ms from [llm] timeout_ms (default 4000).
--spec llm_timeout(map()) -> pos_integer().
-llm_timeout(Conf) ->
-    case maps:get(timeout_ms, Conf, undefined) of
-        undefined            -> 4000;
-        B when is_binary(B)  -> try binary_to_integer(B) catch _:_ -> 4000 end;
-        N when is_integer(N), N > 0 -> N;
-        _                    -> 4000
-    end.
-
-%% @private Local keyword fallback (no LLM): split a phrase into topic
-%% words, dropping short tokens and common FR/EN stopwords.
+%% @private Local keyword fallback: split a phrase into topic words,
+%% dropping short tokens and common FR/EN stopwords.
 -spec local_keywords(binary()) -> [binary()].
 local_keywords(Query) ->
     Parts = binary:split(Query,
@@ -175,120 +105,6 @@ fallback_topics(Query) ->
         []  -> local_keywords(Query);
         Ts  -> Ts
     end.
-
-%%====================================================================
-%% Synthesis
-%%====================================================================
-
-%% @doc Generate a prose answer from the top-ranked results.
-%%
-%% Formats the top 5 items as context and asks the configured LLM
-%% to answer `Query' in 2–4 plain-text sentences.
-%%
-%% <em>Not called by the default Emquest pipeline.</em> Available
-%% for external clients (MCP, EmPy, custom integrations) that want
-%% a prose summary alongside raw results.
-%%
-%% Returns `<<>>' if the LLM call fails.
-%% @end
--spec synthesize(binary(), [map()]) -> binary().
-synthesize(Query, RankedItems) ->
-    Conf      = read_llm_conf(),
-    Provider  = maps:get(provider, Conf, <<"mistral">>),
-    SysPrompt = ensure_binary(maps:get(system_prompt, Conf,
-                                       ?DEFAULT_SYSTEM_PROMPT)),
-    TopN    = lists:sublist(RankedItems, 5),
-    Context = iolist_to_binary(json:encode(
-        [begin
-            Props = maps:get(<<"properties">>, Item, Item),
-            Label = maps:get(<<"title">>,  Props,
-                        maps:get(<<"label">>,  Props, <<>>)),
-            Value = maps:get(<<"resume">>, Props,
-                        maps:get(<<"value">>,  Props, <<>>)),
-            #{<<"l">> => Label, <<"v">> => Value}
-         end || Item <- TopN]
-    )),
-    Prompt = <<"Answer or summarise the following query in 2-4 sentences. "
-               "Use the provided search results as context. "
-               "Reply in plain text only — no JSON, no markdown, no bullet points.\n\n"
-               "Query: ", Query/binary, "\n\n"
-               "Top results context:\n", Context/binary>>,
-    HandlerConf = handler_conf(Provider, Conf, SysPrompt),
-    case call_handler(Provider, Prompt, HandlerConf) of
-        {ok, Text} -> Text;
-        _          -> <<>>
-    end.
-
-%%====================================================================
-%% Result ranking
-%%====================================================================
-
-%% @doc Re-rank a list of result maps by relevance to `Query'.
-%%
-%% Returns the same items in a new order with a `<<"score">>' key
-%% added to each (0–3, where 3 is most relevant). Items not covered
-%% by the LLM ranking are appended at the end in their original order.
-%%
-%% <em>Not called by the default Emquest pipeline.</em> Available
-%% for external clients that want LLM-assisted ranking after
-%% collecting results from {@link emquest_handler} or directly from
-%% em_disco.
-%%
-%% Returns the input list unchanged if `Items' is empty.
-%% @end
--spec rank(binary(), [map()]) -> [map()].
-rank(_Query, []) -> [];
-rank(Query, Items) ->
-    Conf = read_llm_conf(),
-    Indexed = lists:zip(lists:seq(0, length(Items) - 1), Items),
-    IndexedJson = iolist_to_binary(json:encode(
-        [begin
-            Props = maps:get(<<"properties">>, Item, Item),
-            Label = maps:get(<<"title">>,  Props,
-                        maps:get(<<"label">>,  Props, <<>>)),
-            Value = maps:get(<<"resume">>, Props,
-                        maps:get(<<"value">>,  Props, <<>>)),
-            #{<<"i">> => I, <<"l">> => Label, <<"v">> => Value}
-         end || {I, Item} <- Indexed]
-    )),
-    Prompt = <<"You receive search results and a query. "
-               "Return ONLY a JSON array of the result indices sorted "
-               "by relevance to the query (most relevant first). "
-               "Keep ALL indices. No explanation, no markdown.\n"
-               "Example for 4 results: [2, 0, 3, 1]\n\n"
-               "Query: ", Query/binary, "\n\n"
-               "Results:\n", IndexedJson/binary>>,
-    HandlerConf = handler_conf(
-        maps:get(provider, Conf, <<"mistral">>),
-        Conf#{temperature => 0.1},
-        <<"You rank search results. Reply only with a JSON array of integers.">>
-    ),
-    RankedIndices = case call_handler(maps:get(provider, Conf, <<"mistral">>),
-                                      Prompt, HandlerConf) of
-        {ok, Text} ->
-            Parsed  = parse_json_integers(Text),
-            All     = lists:seq(0, length(Items) - 1),
-            Missing = All -- Parsed,
-            Parsed ++ Missing;
-        _ ->
-            lists:seq(0, length(Items) - 1)
-    end,
-    Total    = length(RankedIndices),
-    ItemsArr = list_to_tuple(Items),
-    lists:filtermap(fun({Pos, Idx}) ->
-        case Idx >= 0 andalso Idx < tuple_size(ItemsArr) of
-            true ->
-                Item  = element(Idx + 1, ItemsArr),
-                Score = score_for_position(Pos, Total),
-                {true, Item#{<<"score">> => Score}};
-            false -> false
-        end
-    end, lists:zip(lists:seq(0, length(RankedIndices) - 1), RankedIndices)).
-
-score_for_position(_Pos, Total) when Total =< 1 -> 3;
-score_for_position(Pos, Total) ->
-    Quartile = (Pos * 4) div Total,
-    max(0, 3 - Quartile).
 
 %%====================================================================
 %% Disco node discovery
@@ -379,25 +195,6 @@ emquest_pop_port() ->
                     9100
             end
     end.
-
-%% @private
-%% @doc Extract bare hostnames from `[em_disco] nodes' (strips ports).
--spec extract_disco_hosts(map()) -> [string()].
-extract_disco_hosts(Conf) ->
-    NodesStr = maps:get("nodes", Conf,
-                   maps:get("host", Conf, "localhost")),
-    Entries  = string:split(NodesStr, ",", all),
-    lists:filtermap(fun(Entry) ->
-        case string:trim(Entry) of
-            "" -> false;
-            E  ->
-                H = case string:split(E, ":", trailing) of
-                    [Host, _Port] -> string:trim(Host);
-                    [Host]        -> string:trim(Host)
-                end,
-                {true, H}
-        end
-    end, Entries).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -510,69 +307,8 @@ fetch_registry(Url) ->
     end.
 
 %%====================================================================
-%% LLM dispatch
-%%====================================================================
-
-call_handler(<<"mistral">>, Prompt, Conf) -> mistral_handler:generate(Prompt, Conf);
-call_handler(<<"ollama">>,  Prompt, Conf) -> ollama_handler:generate(Prompt, Conf);
-call_handler(<<"openai">>,  Prompt, Conf) -> openai_handler:generate(Prompt, Conf);
-call_handler(<<"claude">>,  Prompt, Conf) -> claude_handler:generate(Prompt, Conf);
-call_handler(_, Prompt, Conf)             -> mistral_handler:generate(Prompt, Conf).
-
-handler_conf(Provider, Conf, SysPrompt) ->
-    Base = case Provider of
-        <<"mistral">> -> mistral_handler:get_env_config();
-        <<"ollama">>  -> (catch ollama_handler:get_env_config());
-        <<"openai">>  -> (catch openai_handler:get_env_config());
-        <<"claude">>  -> (catch claude_handler:get_env_config());
-        _             -> mistral_handler:get_env_config()
-    end,
-    Overrides = maps:filter(fun(_, V) -> V =/= undefined end, #{
-        endpoint      => maps:get(endpoint,    Conf, undefined),
-        model         => maps:get(model,       Conf, undefined),
-        temperature   => maps:get(temperature, Conf, undefined),
-        system_prompt => ensure_binary(SysPrompt)
-    }),
-    case is_map(Base) of
-        true  -> maps:merge(Base, Overrides);
-        false -> Overrides
-    end.
-
-%%====================================================================
-%% JSON helpers
-%%====================================================================
-
-parse_json_list(Text) ->
-    try
-        List = json:decode(strip_fences(Text)),
-        [Q || Q <- List, is_binary(Q)]
-    catch _:_ -> [] end.
-
-parse_json_integers(Text) ->
-    try
-        List = json:decode(strip_fences(Text)),
-        [I || I <- List, is_integer(I)]
-    catch _:_ -> [] end.
-
-strip_fences(Text) ->
-    T1 = re:replace(Text, <<"^```(json)?\\s*">>, <<"">>,
-                    [{return, binary}, multiline]),
-    re:replace(T1, <<"\\s*```$">>, <<"">>,
-               [{return, binary}, multiline]).
-
-%%====================================================================
 %% Configuration
 %%====================================================================
-
-read_llm_conf() ->
-    case conf_path() of
-        undefined -> #{};
-        Path ->
-            case file:read_file(Path) of
-                {ok, Bin} -> parse_llm_section(parse_conf(Bin));
-                _         -> #{}
-            end
-    end.
 
 read_disco_conf() ->
     case conf_path() of
@@ -583,21 +319,6 @@ read_disco_conf() ->
                 _         -> #{}
             end
     end.
-
-parse_llm_section(ConfMap) ->
-    Section = maps:get("llm", ConfMap, #{}),
-    maps:fold(fun(K, V, Acc) ->
-        Value = case K of
-            "temperature" ->
-                try list_to_float(V)
-                catch _:_ ->
-                    try float(list_to_integer(V))
-                    catch _:_ -> 0.3 end
-                end;
-            _ -> list_to_binary(V)
-        end,
-        Acc#{list_to_atom(K) => Value}
-    end, #{}, Section).
 
 -spec conf_path() -> string() | undefined.
 conf_path() ->
@@ -632,8 +353,3 @@ parse_line(Line, {Map, Sec}) when Sec =/= "" ->
         _ -> {Map, Sec}
     end;
 parse_line(_, Acc) -> Acc.
-
-ensure_binary(B) when is_binary(B) -> B;
-ensure_binary(L) when is_list(L)   -> list_to_binary(L);
-ensure_binary(A) when is_atom(A)   -> atom_to_binary(A, utf8);
-ensure_binary(_)                   -> <<>>.

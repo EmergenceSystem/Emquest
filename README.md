@@ -61,8 +61,10 @@ Browser
   agent type rendered automatically
 - **em-pop fan-out** — peers discovered via gossip; top-K by semantic similarity
   queried in parallel for each sub-query
-- **LLM query expansion** — long queries are broken into focused sub-queries via
-  `queen:expand/1` before fan-out
+- **Query expansion** — queries are broken into focused sub-queries via
+  `queen:expand/1` (HF topic extraction with a local keyword fallback) before fan-out
+- **On-device summary (SLM)** — an optional in-browser small language model writes a
+  short synthesis over the top results; nothing leaves the device (see below)
 - **Deduplication** — by URL for web results; by label for generic cards
 - **Network view** — `GET /network` shows all discovered em-pop peers with routable
   status, auto-refreshes every 15 s
@@ -78,7 +80,7 @@ Browser
 - [em_disco](https://github.com/EmergenceSystem/em_disco) running as a gossip bootstrap
   seed (or any em-pop node to seed from)
 - At least one [em_filter](https://hex.pm/packages/em_filter) agent in the gossip ring
-- *(Optional)* An LLM configured in `emergence.conf` for query expansion
+- *(Optional)* A WebGPU-capable browser for the on-device SLM summary
 
 ---
 
@@ -112,18 +114,35 @@ pop_port = 9100
 [emquest]
 port     = 8079
 pop_port = 9300
-
-[llm]
-provider    = mistral
-model       = mistral-small-latest
-temperature = 0.3
 ```
 
 The `[em_disco] pop_port` is the UDP gossip port emquest uses to seed its peer table
 (contacts em_disco at startup). `[emquest] pop_port` is emquest's own gossip listen
 port.
 
-Supported LLM providers: `mistral`, `ollama`, `openai`, `claude`.
+---
+
+## On-device summary (SLM)
+
+The synthesis line above the result cards is written by a **small language model that
+runs entirely in the browser** — the query and the retrieved snippets never leave the
+device. There is no server-side LLM and no API key.
+
+- **Model:** `Qwen2.5-0.5B-Instruct` (q4f16), run via
+  [WebLLM](https://github.com/mlc-ai/web-llm) on **WebGPU**.
+- **Library:** vendored at `priv/static/vendor/web-llm.js` and imported same-origin, so
+  the page's `script-src 'self'` policy is enough — no third-party script host.
+- **Weights:** fetched once from the HuggingFace CDN on first use (~290 MB) and then
+  cached by the browser; the model wasm kernels (~5 MB) come from the MLC lib repo.
+- **CSP:** only the search page (`GET /`) relaxes its policy — it adds
+  `'wasm-unsafe-eval'` (WebLLM compiles WebAssembly) and the HuggingFace /
+  `raw.githubusercontent.com` hosts to `connect-src`. Every other route keeps the
+  strict `default-src 'self'` policy.
+- **Fallback:** when WebGPU is unavailable (or the user opts out), the synthesis slot
+  shows a deterministic, zero-cost summary instead — the badge reads `llm offline`.
+
+The client code lives in `priv/static/slm.js`; it is disabled per-viewer with a single
+`localStorage` flag and degrades to the deterministic summary on any error.
 
 ---
 
@@ -169,13 +188,16 @@ src/
                          GET /network/peers
   emquest_pop.erl      — em-pop gossip node manager; peers_for_query/2, all_peers/0
   emquest_cli.erl      — interactive shell client
-  queen.erl            — LLM expand/1 for query expansion
+  queen.erl            — query expansion (HF topics -> local keywords) +
+                         disco node / em-pop seed resolution
 priv/
   templates/
     index.html         — search single-page application
     network.html       — em-pop network view
   static/
     emergence.js       — SSE client, live card rendering, reorder animation
+    slm.js             — on-device SLM summariser (WebGPU + WebLLM)
+    vendor/web-llm.js  — vendored WebLLM library (imported same-origin)
     style.css          — dark terminal UI
 EmPy.py               — standalone Python CLI client
 ```

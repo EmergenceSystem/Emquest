@@ -12,9 +12,9 @@
 %%% it (`{ok, NewCtx}') or declines (`skip').
 %%%
 %%% Meta-agents are registered per pipeline phase and read from the
-%%% `[agents]' section of `emergence.conf' (mirroring how `queen'
-%%% reads `[llm]'): `router = on|off' enables/disables the `select'
-%%% phase's `agent_router'. Adding a new meta-agent later is a new
+%%% `[agents]' section of `emergence.conf': `router = on|off'
+%%% enables/disables the `select' phase's `agent_router'. Adding a new
+%%% meta-agent later is a new
 %%% module plus one clause in `phase_agents/1' plus one config line —
 %%% no changes to the pipeline itself.
 %%%
@@ -37,11 +37,10 @@
 %%--------------------------------------------------------------------
 %% @doc Fold the enabled meta-agents for `Phase' over `Ctx'.
 %%
-%% Registered phases: `expand' (`agent_planner', gated by
-%% `[agents] planner'), `select' (`agent_router', gated by
-%% `[agents] router'), `rerank' (`agent_judge', gated by
-%% `[agents] judge'). Unwired phases and disabled agents simply
-%% return `Ctx' unchanged.
+%% Registered phases: `select' (`agent_router', gated by
+%% `[agents] router'), `rerank' (`agent_dedup' + `agent_judge', gated
+%% by `[agents] dedup'/`judge'). Unwired phases and disabled agents
+%% simply return `Ctx' unchanged.
 %% @end
 %%--------------------------------------------------------------------
 -spec run_phase(atom(), map()) -> map().
@@ -86,11 +85,6 @@ run_one(Mod, Phase, Ctx) ->
 
 %% @private
 %% @doc Enabled agent modules for `Phase', in fold order.
-phase_agents(expand) ->
-    case agent_on("planner") of
-        true  -> [agent_planner];
-        false -> []
-    end;
 phase_agents(select) ->
     case agent_on("router") of
         true  -> [agent_router];

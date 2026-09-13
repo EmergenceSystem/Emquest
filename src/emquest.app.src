@@ -26,7 +26,6 @@
         em_librarian,
         em_agent,
         agent_router,
-        agent_planner,
         agent_judge,
         agent_dedup,
         emquest_health,

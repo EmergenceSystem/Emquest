@@ -18,9 +18,8 @@
 %%% === Pipeline (POST /query) ===
 %%%
 %%% ```
-%%% 1. queen:expand/1      — split long queries into sub-queries (LLM),
-%%%                          or `agent_planner' (`expand' meta-agent
-%%%                          phase) when `[agents] planner' is on
+%%% 1. queen:expand/1      — split long queries into sub-queries
+%%%                          (HF topics -> local keywords)
 %%% 2. queen:disco_nodes/0 — resolve all configured disco node URLs
 %%% 3. Fan-out             — one process per (sub-query × disco node),
 %%%                          all running in parallel
@@ -28,8 +27,9 @@
 %%%                          arrives; 8 s per-process timeout
 %%% 5. Deduplicate + rank  — first occurrence by URL wins, scored by
 %%%                          `aggregate_and_rank/3'
-%%% 6. Reorder             — re-scored by `agent_judge' (`rerank' phase)
-%%%                          when `[agents] judge' is on, then always
+%%% 6. Reorder             — re-scored by `agent_judge' cross-encoder
+%%%                          (`rerank' phase) when `[agents] judge' is
+%%%                          on, then always
 %%%                          emitted so the browser can remove
 %%%                          duplicates that arrived before dedup ran
 %%% '''
@@ -583,23 +583,10 @@ run_pipeline(Query, Req) ->
 run_pipeline_full(Query, Req) ->
     logger:notice("[emquest] query: ~ts", [Query]),
 
-    %% Step 1 — expand query into sub-queries.
-    %%
-    %% Goes through the meta-agent registry's `expand' phase first
-    %% (`agent_planner', LLM-driven decomposition via ollama). When the
-    %% Planner is off, ollama is down/slow, or its output doesn't parse,
-    %% it returns `skip' and `CtxExpand' below has no `subqueries' key
-    %% — we fall back to the exact pre-meta-agent behaviour:
-    %% `queen:expand/1' (HF topics -> local_keywords).
+    %% Step 1 — expand query into sub-queries (HF topics ->
+    %% local_keywords; the original query is always kept first).
     sse(Req, status, <<"Expanding query...">>),
-    CtxExpand = em_agent:run_phase(expand, #{query => Query}),
-    SubQueries = case CtxExpand of
-        #{subqueries := PlannedSubQueries}
-          when is_list(PlannedSubQueries), PlannedSubQueries =/= [] ->
-            PlannedSubQueries;
-        _ ->
-            queen:expand(Query)
-    end,
+    SubQueries = queen:expand(Query),
 
     %% Step 2 — disco fan-out: one process per (sub-query × disco node).
     Nodes     = queen:disco_nodes(),
@@ -666,14 +653,14 @@ run_pipeline_full(Query, Req) ->
 
     {SortedSids, ScoresMap} = aggregate_and_rank(Query, TaggedItems, QueryVec),
 
-    %% Step 6 — LLM re-rank of the top-N via the meta-agent registry's
-    %% `rerank' phase (`agent_judge'). `TaggedItems' has one entry per
-    %% streamed sid (`Sid' is the running counter assigned in
+    %% Step 6 — cross-encoder re-rank of the top-N via the meta-agent
+    %% registry's `rerank' phase (`agent_judge'). `TaggedItems' has one
+    %% entry per streamed sid (`Sid' is the running counter assigned in
     %% `collect_disco_streaming/4', globally unique), so it doubles as
     %% the sid -> raw item lookup the Judge needs for title/url/resume.
-    %% When the Judge is off, ollama is down/slow, or its output doesn't
-    %% parse, `run_phase/2' returns `skip' and `CtxRerank' below has no
-    %% `sortedsids' key — we fall back to the exact pre-meta-agent
+    %% When the Judge is off, the HF reranker is down/slow, or its
+    %% output doesn't parse, `run_phase/2' returns `skip' and
+    %% `CtxRerank' below has no `sortedsids' key — we fall back to the
     %% ranking `aggregate_and_rank/3' already produced.
     ItemsBySid = maps:from_list(
         [{Sid, Item} || {Sid, Item, _Rank, _SubQ, _Trust} <- TaggedItems]),

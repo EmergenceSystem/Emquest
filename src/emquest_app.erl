@@ -7,7 +7,7 @@
 %%%
 %%% `inets' is always started because both {@link emquest_cli} and
 %%% {@link queen} use `httpc' for outbound HTTP requests to em_disco
-%%% nodes and LLM providers.
+%%% nodes.
 %%%
 %%% === HTTP mode control ===
 %%%
