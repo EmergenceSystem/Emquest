@@ -161,6 +161,7 @@ async function translate(texts, lang, handlers) {
         out.push(...parseTranslation(raw, batch));
         if (handlers.onProgress) handlers.onProgress(Math.min(1, (i + batch.length) / texts.length), 'translating');
     }
+    while (out.length < texts.length) out.push(texts[out.length]);
     return out;
 }
 
