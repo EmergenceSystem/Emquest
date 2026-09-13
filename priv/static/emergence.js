@@ -1327,7 +1327,12 @@ function closeSettings() { const m = document.getElementById('settings-modal'); 
         if (cur) { let u = 0; try { u = await getUsage(); } catch (_) {} cur.textContent = fmtSize(u) + ' ' + T('used of') + ' ' + fmtSize(MEM_BUDGET); }
     });
     document.getElementById('set-clear')?.addEventListener('click', async () => {
-        if (!confirm(T('Delete ALL saved searches from this device? This cannot be undone.'))) return;
+        const ok = window.EmquestDialog
+            ? await window.EmquestDialog.confirm(
+                  T('Delete ALL saved searches from this device? This cannot be undone.'),
+                  { okText: T('Clear all'), danger: true })
+            : confirm(T('Delete ALL saved searches from this device? This cannot be undone.'));
+        if (!ok) return;
         await clearAllData();
         closeSettings();
     });

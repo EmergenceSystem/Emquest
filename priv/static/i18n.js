@@ -79,6 +79,7 @@
         'Delete ALL saved searches from this device? This cannot be undone.',
         'Requires on-device AI (WebGPU)', 'Enable on-device AI above to translate',
         'Listed languages work offline; others need on-device AI (WebGPU)',
+        'Please confirm', 'Notice', 'Cancel', 'OK',
         'Apply', 'Language',
         'result', 'results', 'aggregated', 'top domain',
         'DNS record', 'DNS records', 'media item', 'media items',
@@ -87,7 +88,7 @@
 
     /* Bump when the curated dictionaries (i18n_dict.js) change, to invalidate
      * per-language caches that were built against the old translations. */
-    const I18N_REV = '1';
+    const I18N_REV = '2';
     /* Normalise a source for dictionary lookup: HTML markup emits &nbsp;
      * (U+00A0) which reaches the DOM as a non-breaking space; dictionary keys
      * are written with plain spaces, so fold it before matching. */
