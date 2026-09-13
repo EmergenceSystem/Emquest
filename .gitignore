@@ -53,3 +53,6 @@ mnesia_test_data/
 
 # Local admin secrets (never commit)
 /config/admin.secret
+
+# runtime em_pop DETS store
+priv/state/

@@ -276,14 +276,18 @@ function newTurn(query) {
     const el = document.createElement('div');
     el.className = 'turn';
     el.innerHTML =
-        `<div class="bubble-user"><div class="u">${escHtml(query)}</div></div>`
-        + `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
-        +   `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
-        +   `<div class="syn-text muted">…</div></div>`
-        +   `<div class="progress-log"><div class="pbar"><div class="pbar-fill"></div></div><span class="pbar-count"></span></div>`
+        `<div class="turn-head">`
+        +   `<div class="bubble-user"><div class="u">${escHtml(query)}</div></div>`
+        +   `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
+        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
+        +     `<div class="syn-text muted">…</div></div>`
+        +     `<div class="progress-log"><div class="pbar"><div class="pbar-fill"></div></div><span class="pbar-count"></span></div>`
+        +   `</div></div>`
+        + `</div>`
+        + `<div class="turn-body">`
         +   `<div class="res-label" hidden>RESULTS</div>`
         +   `<ul class="items-list"></ul>`
-        + `</div></div>`;
+        + `</div>`;
     fluxInner().appendChild(el);
     return {
         el, query,
@@ -305,12 +309,17 @@ function renderSavedTurn(rec) {
     const userBubble = rec.image
         ? `<div class="bubble-user bubble-user--image"><div class="u"><span class="up-icon">🖼</span>${escHtml(truncate(rec.query, 64))}</div></div>`
         : `<div class="bubble-user"><div class="u">${escHtml(rec.query)}</div></div>`;
-    el.innerHTML = userBubble
-        + `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
-        +   `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
-        +   `<div class="syn-text">${escHtml(rec.synthesis || '')}</div></div>`
+    el.innerHTML =
+        `<div class="turn-head">`
+        +   userBubble
+        +   `<div class="bubble-ai">${AI_AVATAR}<div class="ai-body">`
+        +     `<div class="synthesis"><div class="syn-label">SYNTHESIS <span class="syn-badge-off">llm offline</span></div>`
+        +     `<div class="syn-text">${escHtml(rec.synthesis || '')}</div></div>`
+        +   `</div></div>`
+        + `</div>`
+        + `<div class="turn-body">`
         +   (rec.items && rec.items.length ? `<div class="res-label">RESULTS · ${rec.items.length}</div><ul class="items-list"></ul>` : '')
-        + `</div></div>`;
+        + `</div>`;
     fluxInner().appendChild(el);
     const list = el.querySelector('.items-list');
     if (list && rec.items) rec.items.forEach((item, i) => {
@@ -508,26 +517,69 @@ function handleEvent(t, event) {
     }
 }
 
-/* Deterministic synthesis until the LLM fills the slot. */
-function renderSynthesis(t) {
-    if (!t.synthTextEl || t._answered) return;
-    const ordered = (t.order.length ? t.order : [...t.items.keys()]);
-    const items = ordered.map(sid => t.items.get(sid)).filter(Boolean);
-    const n = items.length;
-    if (n === 0) { t.synthTextEl.textContent = 'No results found for this query.'; t.synthTextEl.classList.remove('muted'); return; }
+/* Deterministic, zero-cost synthesis — the floor that always works. */
+function deterministicSynthesis(items) {
     const domains = {}; let dns = 0, media = 0;
     for (const it of items) {
         if (it.url) { const hh = hostnameOf(it.url); if (hh) domains[hh] = (domains[hh] || 0) + 1; }
         if (Array.isArray(it.ips) && it.ips.length) dns++;
         if ((it.media_type && it.media_type !== 'text') || it.doc_type) media++;
     }
+    const n = items.length;
     const top = Object.entries(domains).sort((a, b) => b[1] - a[1])[0];
     const bits = [`${n} result${n !== 1 ? 's' : ''} aggregated`];
     if (top) bits.push(`top domain ${top[0]}`);
     if (dns) bits.push(`${dns} DNS record${dns !== 1 ? 's' : ''}`);
     if (media) bits.push(`${media} media item${media !== 1 ? 's' : ''}`);
-    t.synthTextEl.textContent = bits.join(' · ') + '.';
+    return bits.join(' · ') + '.';
+}
+
+/* Fill the slot: deterministic floor first, then let the on-device SLM
+ * (WebGPU only, opt-in) stream a real summary over it. */
+function renderSynthesis(t) {
+    if (!t.synthTextEl || t._answered) return;
+    const ordered = (t.order.length ? t.order : [...t.items.keys()]);
+    const items = ordered.map(sid => t.items.get(sid)).filter(Boolean);
+    if (items.length === 0) {
+        t.synthTextEl.textContent = 'No results found for this query.';
+        t.synthTextEl.classList.remove('muted');
+        return;
+    }
+    const floor = deterministicSynthesis(items);
+    t.synthTextEl.textContent = floor;
     t.synthTextEl.classList.remove('muted');
+    localSummarize(t, items, floor);
+}
+
+/* Run the on-device model when available + enabled. Streams into the slot,
+ * restores the deterministic floor on any failure. Never throws. */
+async function localSummarize(t, items, floor) {
+    const S = window.EmquestSLM;
+    if (!S || t._answered || t._slmRan || !S.enabled()) return;
+    /* Only summarise when there is text to summarise. */
+    if (S.isTextItem && !items.some(S.isTextItem)) return;
+    try { if (!(await S.supported())) return; } catch (_) { return; }
+    t._slmRan = true;
+    const el = t.synthTextEl, badge = t.badgeEl;
+    const setBadge = (txt, cls) => { if (!badge) return; badge.textContent = txt; badge.className = cls; };
+    setBadge('local · loading model…', 'syn-badge-local');
+    let started = false;
+    try {
+        const text = await S.summarize(t.query, items, {
+            onProgress: (p) => { if (!started) setBadge('local · loading model ' + Math.round((p || 0) * 100) + '%', 'syn-badge-local'); },
+            onToken: (d) => {
+                if (!started) { started = true; el.textContent = ''; setBadge('local · summarising…', 'syn-badge-local'); }
+                el.textContent += d;
+                if (nearBottom(fluxEl())) scrollFluxToBottom();
+            },
+        });
+        if (text) { el.textContent = text; setBadge('local ai', 'syn-badge-local'); persistSynthesis(t, text); }
+        else { el.textContent = floor; setBadge('llm offline', 'syn-badge-off'); }
+    } catch (e) {
+        console.warn('[emquest] slm', e);
+        el.textContent = floor;
+        setBadge('llm offline', 'syn-badge-off');
+    }
 }
 
 async function persistTurn(t) {
@@ -543,6 +595,7 @@ async function persistTurn(t) {
         const rec = { convId: currentConvId, seq, query: t.query, ts: Date.now(), synthesis: t.synthTextEl ? t.synthTextEl.textContent : '', items };
         const bytes = byteLen(rec);
         await cPut('turns', rec);
+        t._savedKey = [currentConvId, seq];   /* so the SLM can patch it later */
         conv.seq = seq + 1; conv.updatedAt = Date.now(); conv.bytes = (conv.bytes || 0) + bytes;
         await cPut('conversations', conv);
         await setUsage((await getUsage()) + bytes);
@@ -550,6 +603,26 @@ async function persistTurn(t) {
         setActiveConv(currentConvId);
         await enforceBudget();
     } catch (e) { console.warn('[emquest] persist failed', e); }
+}
+
+/* Update a saved turn's synthesis once the SLM finishes (it streams in
+ * after persistTurn has already stored the deterministic floor). */
+async function persistSynthesis(t, text) {
+    if (!t._savedKey) return;
+    try {
+        const rec = await cGet('turns', t._savedKey);
+        if (!rec) return;
+        const before = byteLen(rec);
+        rec.synthesis = text;
+        await cPut('turns', rec);
+        const delta = byteLen(rec) - before;
+        if (delta) {
+            await setUsage((await getUsage()) + delta);
+            const conv = await cGet('conversations', rec.convId);
+            if (conv) { conv.bytes = Math.max(0, (conv.bytes || 0) + delta); await cPut('conversations', conv); }
+            await updateMemBar();
+        }
+    } catch (e) { console.warn('[emquest] synthesis persist failed', e); }
 }
 
 /* Keep only text + URLs — never image bytes. Thumbnails re-fetch lazily. */
@@ -1208,6 +1281,14 @@ async function openSettings() {
     if (dev)   dev.textContent = MEM_QUOTA
         ? 'Device grants ~' + fmtSize(MEM_QUOTA) + ' to this app (max cap ' + ceilMb + ' MB).'
         : 'Device quota unknown; capped at ' + ceilMb + ' MB.';
+    /* On-device AI toggle — only shown when WebGPU is actually available. */
+    const slmRow = document.getElementById('set-slm-row');
+    const slmBox = document.getElementById('set-slm');
+    const S = window.EmquestSLM;
+    let slmOk = false;
+    try { slmOk = !!(S && await S.supported()); } catch (_) {}
+    if (slmRow) slmRow.hidden = !slmOk;
+    if (slmBox && S) slmBox.checked = S.enabled();
     modal.hidden = false;
 }
 function closeSettings() { const m = document.getElementById('settings-modal'); if (m) m.hidden = true; }
@@ -1229,6 +1310,8 @@ function closeSettings() { const m = document.getElementById('settings-modal'); 
     document.getElementById('set-save')?.addEventListener('click', async () => {
         const mb = parseInt((num || range)?.value, 10);
         if (Number.isFinite(mb)) await saveBudget(mb * MB);
+        const slmBox = document.getElementById('set-slm');
+        if (slmBox && window.EmquestSLM) window.EmquestSLM.setEnabled(slmBox.checked);
         closeSettings();
     });
     document.getElementById('set-auto')?.addEventListener('click', async () => {

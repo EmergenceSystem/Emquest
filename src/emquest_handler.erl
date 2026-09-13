@@ -64,8 +64,9 @@ init(Req0, index) ->
             logger:error("[emquest] index.html read failed: ~p", [R]),
             {500, <<"Internal Server Error">>, <<"text/plain">>}
     end,
-    %% index (Terminal Glass) has no inline handlers → strict script-src 'self'.
-    {ok, cowboy_req:reply(Code, security_headers(CT), Body, Req0), index};
+    %% index (Terminal Glass) has no inline handlers → script-src 'self';
+    %% the app CSP additionally permits the on-device SLM (wasm + model CDN).
+    {ok, cowboy_req:reply(Code, security_headers_app(CT), Body, Req0), index};
 
 init(Req0, drift) ->
     Path = filename:join([code:priv_dir(emquest), "templates", "drift.html"]),
@@ -1560,6 +1561,33 @@ security_headers(ContentType, ExtraScriptSrc) ->
             "font-src 'self' https://fonts.gstatic.com data:; "
             "img-src 'self' https: data:; media-src 'self' https:; "
             "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,
+      <<"x-content-type-options">>  => <<"nosniff">>,
+      <<"x-frame-options">>         => <<"DENY">>,
+      <<"referrer-policy">>         => <<"no-referrer">>}.
+
+%% @doc CSP for the search app page (index.html) only. Same hardening as
+%% security_headers/1 plus exactly what the on-device SLM needs
+%% (priv/static/slm.js -> vendored priv/static/vendor/web-llm.js):
+%%   * `'wasm-unsafe-eval'' in script-src   — WebLLM compiles WebAssembly.
+%%   * huggingface.co (+ its cdn-lfs.* redirect targets) in connect-src
+%%     — model weights + mlc-chat-config.json are fetched from there.
+%%   * raw.githubusercontent.com in connect-src — the model wasm lib
+%%     (mlc-ai/binary-mlc-llm-libs/.../web-llm-models/*.wasm) is fetched
+%%     then instantiated in the browser.
+%% The library itself is served same-origin, so script-src stays 'self';
+%% no external <script> host is permitted. Every OTHER page keeps the
+%% strict policy (connect-src 'self', no wasm-unsafe-eval).
+-spec security_headers_app(binary()) -> map().
+security_headers_app(ContentType) ->
+    #{<<"content-type">>            => ContentType,
+      <<"content-security-policy">> =>
+          <<"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com data:; "
+            "img-src 'self' https: data:; media-src 'self' https:; "
+            "connect-src 'self' https://huggingface.co https://*.huggingface.co "
+            "https://raw.githubusercontent.com; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'">>,
       <<"x-content-type-options">>  => <<"nosniff">>,
       <<"x-frame-options">>         => <<"DENY">>,
       <<"referrer-policy">>         => <<"no-referrer">>}.
