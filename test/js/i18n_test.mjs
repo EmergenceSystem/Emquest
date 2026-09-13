@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { catalogVersion, mergeMap, cacheValid, collectDom, applyDom } from './helpers/i18n_core.mjs';
+import { catalogVersion, mergeMap, cacheValid, collectDom, applyDom, resetDom } from './helpers/i18n_core.mjs';
 
 test('catalogVersion is stable regardless of order', () => {
   assert.equal(catalogVersion(['a', 'b', 'c']), catalogVersion(['c', 'a', 'b']));
@@ -46,4 +46,13 @@ test('applyDom sets text and named attrs from the map', () => {
   applyDom([a, b], { Save: 'Enregistrer', 'Search…': 'Rechercher…' });
   assert.equal(a.textContent, 'Enregistrer');
   assert.equal(b._store.placeholder, 'Rechercher…');
+});
+
+test('attr source is stashed: re-collect returns source, reset restores it', () => {
+  const el = fakeEl({ 'data-i18n-attr': 'placeholder', placeholder: 'Search…' }, '');
+  applyDom([el], { 'Search…': 'Rechercher…' });
+  assert.equal(el._store.placeholder, 'Rechercher…');
+  assert.deepEqual(collectDom([el]), ['Search…']);      // still the English source
+  resetDom([el]);
+  assert.equal(el._store.placeholder, 'Search…');        // restored
 });

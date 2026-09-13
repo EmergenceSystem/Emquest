@@ -30,12 +30,16 @@
     function attrList(el) {
         return (el.getAttribute('data-i18n-attr') || '').split(',').map(s => s.trim()).filter(Boolean);
     }
+    function attrSrc(el, a) {
+        const stash = el.getAttribute('data-i18n-' + a + '-src');
+        return stash != null ? stash : (el.getAttribute(a) || '').trim();
+    }
     function domNodes() { return [...document.querySelectorAll('[data-i18n],[data-i18n-attr]')]; }
     function collectDom(nodes) {
         const set = new Set();
         for (const el of nodes) {
             if (el.getAttribute('data-i18n') !== null) { const s = srcText(el); if (s) set.add(s); }
-            for (const a of attrList(el)) { const v = el.getAttribute(a); if (v) set.add(v.trim()); }
+            for (const a of attrList(el)) { const v = attrSrc(el, a); if (v) set.add(v); }
         }
         return [...set];
     }
@@ -48,8 +52,21 @@
             }
             for (const a of attrList(el)) {
                 const cur = el.getAttribute(a); if (cur == null) continue;
-                const src = cur.trim();
+                if (el.getAttribute('data-i18n-' + a + '-src') == null) el.setAttribute('data-i18n-' + a + '-src', cur.trim());
+                const src = attrSrc(el, a);
                 if (map[src] != null) el.setAttribute(a, map[src]);
+            }
+        }
+    }
+    function resetDom(nodes) {
+        for (const el of nodes) {
+            if (el.getAttribute('data-i18n') !== null) {
+                const s = el.getAttribute('data-i18n-src');
+                if (s != null) el.textContent = s;
+            }
+            for (const a of attrList(el)) {
+                const s = el.getAttribute('data-i18n-' + a + '-src');
+                if (s != null) el.setAttribute(a, s);
             }
         }
     }
@@ -60,7 +77,10 @@
         'local · summarising…', 'used of', 'No results found for this query.',
         'No searches yet.',
         'Delete ALL saved searches from this device? This cannot be undone.',
-        'Requires on-device AI (WebGPU)', 'Apply', 'Language',
+        'Requires on-device AI (WebGPU)', 'Enable on-device AI above to translate',
+        'Apply', 'Language',
+        'result', 'results', 'aggregated', 'top domain',
+        'DNS record', 'DNS records', 'media item', 'media items',
     ];
     const _seen = new Set(JS_STRINGS);
 
@@ -92,10 +112,7 @@
         if (lang === 'en') {
             _lang = 'en'; _map = {};
             try { localStorage.setItem(LANG_KEY, 'en'); } catch (_) {}
-            for (const el of domNodes()) {
-                const s = el.getAttribute('data-i18n-src');
-                if (s != null && el.getAttribute('data-i18n') !== null) el.textContent = s;
-            }
+            resetDom(domNodes());
             return;
         }
         const sources = allSources();

@@ -520,10 +520,10 @@ function deterministicSynthesis(items) {
     }
     const n = items.length;
     const top = Object.entries(domains).sort((a, b) => b[1] - a[1])[0];
-    const bits = [`${n} result${n !== 1 ? 's' : ''} aggregated`];
-    if (top) bits.push(`top domain ${top[0]}`);
-    if (dns) bits.push(`${dns} DNS record${dns !== 1 ? 's' : ''}`);
-    if (media) bits.push(`${media} media item${media !== 1 ? 's' : ''}`);
+    const bits = [`${n} ${T(n !== 1 ? 'results' : 'result')} ${T('aggregated')}`];
+    if (top) bits.push(`${T('top domain')} ${top[0]}`);
+    if (dns) bits.push(`${dns} ${T(dns !== 1 ? 'DNS records' : 'DNS record')}`);
+    if (media) bits.push(`${media} ${T(media !== 1 ? 'media items' : 'media item')}`);
     return bits.join(' · ') + '.';
 }
 
@@ -1287,9 +1287,12 @@ async function openSettings() {
     const langApply  = document.getElementById('set-lang-apply');
     const langStatus = document.getElementById('set-lang-status');
     if (langInput) langInput.value = (window.EmquestI18n ? window.EmquestI18n.current() : 'en');
-    if (langInput) langInput.disabled = !slmOk;
-    if (langApply) langApply.disabled = !slmOk;
-    if (langStatus) langStatus.textContent = slmOk ? '' : T('Requires on-device AI (WebGPU)');
+    const slmOn = !!(window.EmquestSLM && window.EmquestSLM.enabled && window.EmquestSLM.enabled());
+    const langReady = slmOk && slmOn;
+    if (langInput) langInput.disabled = !langReady;
+    if (langApply) langApply.disabled = !langReady;
+    if (langStatus) langStatus.textContent = !slmOk ? T('Requires on-device AI (WebGPU)')
+                                            : (!slmOn ? T('Enable on-device AI above to translate') : '');
     modal.hidden = false;
 }
 function closeSettings() { const m = document.getElementById('settings-modal'); if (m) m.hidden = true; }
