@@ -780,6 +780,60 @@ body { overflow: hidden; min-height: 0; }
 .mem-fill { height: 100%; width: 0%; background: var(--neon); box-shadow: 0 0 8px rgba(0, 255, 160, 0.6); transition: width 0.4s var(--ease); }
 .mem-fill.warn { background: var(--amber); box-shadow: 0 0 8px rgba(245, 166, 35, 0.6); }
 .sb-note { opacity: 0.7; margin-top: 0.15rem; }
+.mem-right { display: inline-flex; align-items: center; gap: 0.4rem; }
+.set-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 0; border: 0; background: transparent;
+    color: var(--muted); cursor: pointer; transition: color 0.15s, transform 0.3s var(--ease);
+}
+.set-btn svg { width: 14px; height: 14px; }
+.set-btn:hover { color: var(--neon); transform: rotate(60deg); }
+
+/* ── Storage settings modal ──────────────────────────────────────── */
+.modal {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+    background: rgba(2, 8, 6, 0.66); backdrop-filter: blur(6px);
+    animation: fadeIn 0.18s var(--ease) both;
+}
+.modal[hidden] { display: none; }
+.modal-card {
+    width: 100%; max-width: 440px;
+    background: var(--surface-2); border: 1px solid var(--border-hi); border-radius: 14px;
+    padding: 1.3rem 1.4rem 1.2rem; color: var(--text);
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55), 0 0 24px var(--green-glow);
+    animation: promptIn 0.22s var(--ease) both;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.7rem; }
+.modal-head h2 { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.06em; color: var(--text); margin: 0; }
+.modal-x { border: 0; background: transparent; color: var(--muted); font-size: 1rem; cursor: pointer; line-height: 1; }
+.modal-x:hover { color: var(--neon); }
+.set-desc { font-size: 0.76rem; line-height: 1.5; color: var(--text-secondary); margin: 0 0 0.9rem; }
+.set-desc strong { color: var(--neon); }
+.set-line { font-size: 0.74rem; font-family: var(--font-mono); color: var(--text); margin: 0.15rem 0; font-variant-numeric: tabular-nums; }
+.set-muted { color: var(--muted); }
+.set-label { display: block; font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 1rem 0 0.4rem; }
+.set-range { display: flex; align-items: center; gap: 0.8rem; }
+.set-range input[type="range"] { flex: 1; accent-color: var(--neon); }
+.set-num-wrap { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.set-num-wrap input[type="number"] {
+    width: 4.2rem; padding: 0.3rem 0.4rem; margin-right: 0.25rem;
+    font-family: var(--font-mono); font-size: 0.78rem; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.modal-actions { display: flex; gap: 0.5rem; margin-top: 1.3rem; }
+.modal-actions button {
+    font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+    padding: 0.5rem 0.85rem; border-radius: 8px; cursor: pointer; transition: all 0.15s;
+    border: 1px solid var(--border);
+}
+.btn-primary   { background: var(--neon); border-color: var(--neon); color: #04120c; font-weight: 600; margin-left: auto; }
+.btn-primary:hover   { box-shadow: 0 0 12px var(--green-glow); }
+.btn-secondary { background: transparent; color: var(--text-secondary); }
+.btn-secondary:hover { border-color: var(--border-hi); color: var(--text); }
+.btn-danger    { background: transparent; color: var(--red); border-color: rgba(245, 75, 75, 0.4); }
+.btn-danger:hover    { background: rgba(245, 75, 75, 0.12); border-color: var(--red); }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ── Main column ─────────────────────────────────────────────────── */
 .col { display: flex; flex-direction: column; min-height: 0; position: relative; }
