@@ -29,7 +29,7 @@
                     <span class="logo-name">EMERGENCE</span>
                     <span class="logo-tag">distributed</span>
                 </div>
-                <button class="new-btn" id="new-search-btn" type="button">
+                <button class="new-btn" id="new-search-btn" type="button" data-i18n>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                     </svg>
@@ -37,15 +37,15 @@
                 </button>
             </div>
 
-            <div class="sb-label">SEARCHES</div>
+            <div class="sb-label" data-i18n>SEARCHES</div>
             <div class="conv-list" id="conv-list"></div>
 
             <div class="sb-foot">
                 <div class="mem-row">
-                    <span>local memory</span>
+                    <span data-i18n>local memory</span>
                     <span class="mem-right">
                         <span id="mem-text">0 KB / 40 MB</span>
-                        <button class="set-btn" id="settings-btn" type="button" aria-label="Storage settings" title="Storage settings">
+                        <button class="set-btn" id="settings-btn" type="button" aria-label="Storage settings" title="Storage settings" data-i18n-attr="title,aria-label">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <circle cx="12" cy="12" r="3"/>
                                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -54,7 +54,7 @@
                     </span>
                 </div>
                 <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
-                <div class="sb-note">images lazy-fetched, not stored</div>
+                <div class="sb-note" data-i18n>images lazy-fetched, not stored</div>
             </div>
         </aside>
 
@@ -71,9 +71,9 @@
             <div class="flux" id="flux">
                 <div class="flux-inner" id="flux-inner">
                     <div class="empty-state" id="empty-state">
-                        <h1 class="welcome-title">Distributed discovery.</h1>
-                        <p class="welcome-text">Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
-                        <p class="empty-hint">All agents stand by.</p>
+                        <h1 class="welcome-title" data-i18n>Distributed discovery.</h1>
+                        <p class="welcome-text" data-i18n>Emergence is an open, decentralized search network. Dozens of independent, cryptographically-signed filters answer your query in parallel — no central index, no tracking, no ads. One question, the whole mesh.</p>
+                        <p class="empty-hint" data-i18n>All agents stand by.</p>
                     </div>
                     <!-- Turns appended here by JS -->
                 </div>
@@ -90,6 +90,7 @@
                             rows="1"
                             autocomplete="off"
                             spellcheck="false"
+                            data-i18n-attr="placeholder"
                         ></textarea>
                         <input type="file" id="media-file" accept="image/*" hidden>
                         <button class="send-btn" id="send-btn" aria-label="Send">
@@ -135,13 +136,13 @@
     <div class="modal" id="settings-modal" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="set-title">
             <div class="modal-head">
-                <h2 id="set-title">Local storage</h2>
-                <button class="modal-x" type="button" data-close aria-label="Close">✕</button>
+                <h2 id="set-title" data-i18n>Local storage</h2>
+                <button class="modal-x" type="button" data-close aria-label="Close" data-i18n-attr="aria-label">✕</button>
             </div>
-            <p class="set-desc">One shared budget covers <strong>all</strong> your saved searches on this device. When it fills up, the oldest searches are trimmed, then removed.</p>
+            <p class="set-desc" data-i18n>One shared budget covers <strong>all</strong> your saved searches on this device. When it fills up, the oldest searches are trimmed, then removed.</p>
             <p class="set-line" id="set-budget-cur">0 KB used</p>
             <p class="set-line set-muted" id="set-device"></p>
-            <label class="set-label" for="set-budget-range">Maximum size</label>
+            <label class="set-label" for="set-budget-range" data-i18n>Maximum size</label>
             <div class="set-range">
                 <input type="range" id="set-budget-range" min="10" max="500" step="5" value="40">
                 <span class="set-num-wrap"><input type="number" id="set-budget-num" min="10" max="500" step="5" value="40"> MB</span>
@@ -149,21 +150,42 @@
             <div class="set-toggle" id="set-slm-row" hidden>
                 <label class="set-switch">
                     <input type="checkbox" id="set-slm">
-                    <span>Summarise results on-device</span>
+                    <span data-i18n>Summarise results on-device</span>
                 </label>
-                <p class="set-line set-muted" id="set-slm-note">A small AI model runs in your browser (WebGPU). One-time ~350&nbsp;MB download, cached locally — your query and results never leave the device.</p>
+                <p class="set-line set-muted" id="set-slm-note" data-i18n>A small AI model runs in your browser (WebGPU). One-time ~350&nbsp;MB download, cached locally — your query and results never leave the device.</p>
+            </div>
+
+            <div class="set-toggle" id="set-lang-row">
+                <label class="set-label" for="set-lang" data-i18n>Language</label>
+                <div class="set-range">
+                    <input type="text" id="set-lang" list="lang-list" autocomplete="off"
+                           data-i18n-attr="placeholder" placeholder="Type any language (e.g. Français)">
+                    <button class="btn-secondary" id="set-lang-apply" type="button" data-i18n>Apply</button>
+                </div>
+                <datalist id="lang-list">
+                    <option value="English"></option><option value="Français"></option>
+                    <option value="Español"></option><option value="Deutsch"></option>
+                    <option value="Italiano"></option><option value="Português"></option>
+                    <option value="Nederlands"></option><option value="Polski"></option>
+                    <option value="Türkçe"></option><option value="Русский"></option>
+                    <option value="العربية"></option><option value="中文"></option>
+                    <option value="日本語"></option><option value="한국어"></option>
+                    <option value="हिन्दी"></option>
+                </datalist>
+                <p class="set-line set-muted" id="set-lang-status"></p>
             </div>
 
             <div class="modal-actions">
-                <button class="btn-secondary" id="set-auto" type="button">Auto-size</button>
-                <button class="btn-danger"    id="set-clear" type="button">Clear all</button>
-                <button class="btn-primary"   id="set-save"  type="button">Save</button>
+                <button class="btn-secondary" id="set-auto" type="button" data-i18n>Auto-size</button>
+                <button class="btn-danger"    id="set-clear" type="button" data-i18n>Clear all</button>
+                <button class="btn-primary"   id="set-save"  type="button" data-i18n>Save</button>
             </div>
         </div>
     </div>
 
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=52"></script>
-    <script type="module" src="/static/slm.js?v=3"></script>
+    <script src="/static/emergence.js?v=53"></script>
+    <script src="/static/i18n.js?v=1"></script>
+    <script type="module" src="/static/slm.js?v=4"></script>
 </body>
 </html>
