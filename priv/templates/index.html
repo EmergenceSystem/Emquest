@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=47">
+    <link rel="stylesheet" href="/static/style.css?v=48">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -41,7 +41,18 @@
             <div class="conv-list" id="conv-list"></div>
 
             <div class="sb-foot">
-                <div class="mem-row"><span>local memory</span><span id="mem-text">0 KB / 40 MB</span></div>
+                <div class="mem-row">
+                    <span>local memory</span>
+                    <span class="mem-right">
+                        <span id="mem-text">0 KB / 40 MB</span>
+                        <button class="set-btn" id="settings-btn" type="button" aria-label="Storage settings" title="Storage settings">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="3"/>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                            </svg>
+                        </button>
+                    </span>
+                </div>
                 <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
                 <div class="sb-note">images lazy-fetched, not stored</div>
             </div>
@@ -120,7 +131,30 @@
         </div>
     </div>
 
+    <!-- ── Storage settings modal ──────────────────────────────── -->
+    <div class="modal" id="settings-modal" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="set-title">
+            <div class="modal-head">
+                <h2 id="set-title">Local storage</h2>
+                <button class="modal-x" type="button" data-close aria-label="Close">✕</button>
+            </div>
+            <p class="set-desc">One shared budget covers <strong>all</strong> your saved searches on this device. When it fills up, the oldest searches are trimmed, then removed.</p>
+            <p class="set-line" id="set-budget-cur">0 KB used</p>
+            <p class="set-line set-muted" id="set-device"></p>
+            <label class="set-label" for="set-budget-range">Maximum size</label>
+            <div class="set-range">
+                <input type="range" id="set-budget-range" min="10" max="500" step="5" value="40">
+                <span class="set-num-wrap"><input type="number" id="set-budget-num" min="10" max="500" step="5" value="40"> MB</span>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-secondary" id="set-auto" type="button">Auto-size</button>
+                <button class="btn-danger"    id="set-clear" type="button">Clear all</button>
+                <button class="btn-primary"   id="set-save"  type="button">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=47"></script>
+    <script src="/static/emergence.js?v=49"></script>
 </body>
 </html>

@@ -17,8 +17,20 @@
  * SSE events: status | item | reorder | answer | error
  */
 
-const MEM_BUDGET = 40 * 1024 * 1024;   /* 40 MB before purge */
-const COMPRESS_AT = 0.80;              /* compress oldest turns at 80% */
+/* Memory budget is a single global cap for ALL conversations combined.
+ * It is auto-sized on first run from the device's storage quota, persisted
+ * in the `meta` store, and overridable by the user (settings screen). */
+const MEM_MIN      = 10  * 1024 * 1024;   /* floor: never below 10 MB      */
+const MEM_HARD_CAP = 500 * 1024 * 1024;   /* ceiling: never above 500 MB   */
+const MEM_RATIO    = 0.60;                /* auto = 60% of the origin quota */
+const MEM_DEFAULT  = 40  * 1024 * 1024;   /* fallback when estimate() fails */
+let   MEM_BUDGET   = MEM_DEFAULT;          /* effective cap (mutable)        */
+let   MEM_QUOTA    = 0;                     /* estimated origin quota (bytes) */
+const COMPRESS_AT  = 0.80;                 /* compress oldest turns at 80%   */
+
+const clampBudget = (n) => Math.max(MEM_MIN, Math.min(budgetCeil(), Math.floor(n) || 0));
+/* Upper bound the user may pick: 90% of quota if known, else the hard cap. */
+function budgetCeil() { return MEM_QUOTA ? Math.min(MEM_HARD_CAP, Math.floor(MEM_QUOTA * 0.9)) : MEM_HARD_CAP; }
 
 /* ================================================================== */
 /* Moderation report button                                           */
@@ -128,6 +140,47 @@ const getUsage = () => cGet('meta', 'usage').then(v => (typeof v === 'number' ? 
 const setUsage = (n) => cPut('meta', Math.max(0, n | 0), 'usage');
 function byteLen(o) { try { return JSON.stringify(o).length; } catch (_) { return 0; } }
 
+/* Budget persistence + first-run auto-sizing.
+ * Sets MEM_QUOTA (device estimate) and MEM_BUDGET (effective cap). Called
+ * once at boot before the first render. Never throws. */
+async function initBudget() {
+    try {
+        if (navigator.storage && navigator.storage.estimate) {
+            const est = await navigator.storage.estimate();
+            if (est && est.quota) MEM_QUOTA = est.quota;
+        }
+    } catch (_) {}
+    let pref = null;
+    try { pref = await cGet('meta', 'budget'); } catch (_) {}
+    if (typeof pref === 'number' && pref > 0) {
+        MEM_BUDGET = clampBudget(pref);            /* user/earlier choice   */
+    } else {
+        const auto = MEM_QUOTA ? Math.floor(MEM_QUOTA * MEM_RATIO) : MEM_DEFAULT;
+        MEM_BUDGET = clampBudget(auto);            /* first-run auto-size   */
+        try { await cPut('meta', MEM_BUDGET, 'budget'); } catch (_) {}
+    }
+    /* Ask the browser not to evict this origin under disk pressure. */
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (_) {}
+}
+/* Persist a user-chosen budget (bytes). Returns the clamped value applied. */
+async function saveBudget(bytes) {
+    MEM_BUDGET = clampBudget(bytes);
+    try { await cPut('meta', MEM_BUDGET, 'budget'); } catch (_) {}
+    await enforceBudget();
+    await updateMemBar();
+    return MEM_BUDGET;
+}
+/* Forget the user override and re-derive from the device quota. */
+async function resetBudgetAuto() {
+    try { await cDel('meta', 'budget'); } catch (_) {}
+    const auto = MEM_QUOTA ? Math.floor(MEM_QUOTA * MEM_RATIO) : MEM_DEFAULT;
+    MEM_BUDGET = clampBudget(auto);
+    try { await cPut('meta', MEM_BUDGET, 'budget'); } catch (_) {}
+    await enforceBudget();
+    await updateMemBar();
+    return MEM_BUDGET;
+}
+
 /* ================================================================== */
 /* Conversation state + sidebar                                       */
 /* ================================================================== */
@@ -186,7 +239,7 @@ async function updateMemBar() {
     try { usage = await getUsage(); } catch (_) {}
     const pct = Math.min(100, Math.round(usage / MEM_BUDGET * 100));
     if (fill) { fill.style.width = pct + '%'; fill.classList.toggle('warn', pct >= COMPRESS_AT * 100); }
-    if (text) text.textContent = fmtSize(usage) + ' / 40 MB';
+    if (text) text.textContent = fmtSize(usage) + ' / ' + fmtSize(MEM_BUDGET);
 }
 function setActiveConv(id) {
     document.querySelectorAll('#conv-list .conv').forEach(el => el.classList.toggle('active', el.dataset.id === id));
@@ -1124,8 +1177,77 @@ function showRaster(body, card) {
 })();
 
 /* ================================================================== */
+/* Storage settings screen                                            */
+/* ================================================================== */
+const MB = 1024 * 1024;
+const mbRound = (b) => Math.round(b / MB);
+
+/* Wipe every stored conversation + turn and reset the usage counter. */
+async function clearAllData() {
+    try {
+        const convs = await cGetAll('conversations');
+        for (const c of convs) await deleteConversation(c.id);
+    } catch (_) {}
+    try { await setUsage(0); } catch (_) {}
+    currentConvId = null; clearFlux(); showEmpty(true);
+    await renderSidebar();
+}
+
+async function openSettings() {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+    let usage = 0; try { usage = await getUsage(); } catch (_) {}
+    const ceilMb = mbRound(budgetCeil());
+    const range = document.getElementById('set-budget-range');
+    const num   = document.getElementById('set-budget-num');
+    const cur   = document.getElementById('set-budget-cur');
+    const dev   = document.getElementById('set-device');
+    if (range) { range.min = mbRound(MEM_MIN); range.max = ceilMb; range.value = mbRound(MEM_BUDGET); }
+    if (num)   { num.min   = mbRound(MEM_MIN); num.max   = ceilMb; num.value   = mbRound(MEM_BUDGET); }
+    if (cur)   cur.textContent = fmtSize(usage) + ' used of ' + fmtSize(MEM_BUDGET);
+    if (dev)   dev.textContent = MEM_QUOTA
+        ? 'Device grants ~' + fmtSize(MEM_QUOTA) + ' to this app (max cap ' + ceilMb + ' MB).'
+        : 'Device quota unknown; capped at ' + ceilMb + ' MB.';
+    modal.hidden = false;
+}
+function closeSettings() { const m = document.getElementById('settings-modal'); if (m) m.hidden = true; }
+
+(function wireSettings() {
+    const open  = document.getElementById('settings-btn');
+    const modal = document.getElementById('settings-modal');
+    if (!open || !modal) return;
+    const range = document.getElementById('set-budget-range');
+    const num   = document.getElementById('set-budget-num');
+    open.addEventListener('click', openSettings);
+    modal.addEventListener('click', e => { if (e.target === modal || e.target.closest('[data-close]')) closeSettings(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hidden) closeSettings(); });
+    /* keep the slider and number field in sync */
+    if (range && num) {
+        range.addEventListener('input', () => { num.value = range.value; });
+        num.addEventListener('input', () => { range.value = num.value; });
+    }
+    document.getElementById('set-save')?.addEventListener('click', async () => {
+        const mb = parseInt((num || range)?.value, 10);
+        if (Number.isFinite(mb)) await saveBudget(mb * MB);
+        closeSettings();
+    });
+    document.getElementById('set-auto')?.addEventListener('click', async () => {
+        await resetBudgetAuto();
+        if (range) range.value = mbRound(MEM_BUDGET);
+        if (num)   num.value   = mbRound(MEM_BUDGET);
+        const cur = document.getElementById('set-budget-cur');
+        if (cur) { let u = 0; try { u = await getUsage(); } catch (_) {} cur.textContent = fmtSize(u) + ' used of ' + fmtSize(MEM_BUDGET); }
+    });
+    document.getElementById('set-clear')?.addEventListener('click', async () => {
+        if (!confirm('Delete ALL saved searches from this device? This cannot be undone.')) return;
+        await clearAllData();
+        closeSettings();
+    });
+})();
+
+/* ================================================================== */
 /* Init                                                                */
 /* ================================================================== */
 initTypeFilters();
 restoreMediaTypes();
-renderSidebar();
+initBudget().then(renderSidebar);
