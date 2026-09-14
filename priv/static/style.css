@@ -739,7 +739,9 @@ body { overflow: hidden; min-height: 0; }
 .app {
     position: relative; z-index: 10;
     display: grid; grid-template-columns: var(--sidebar-w) 1fr;
-    height: 100vh;
+    height: 100vh;            /* fallback */
+    height: 100dvh;           /* dynamic viewport: keeps the composer above the
+                                 mobile browser URL bar / keyboard at any size */
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────── */
@@ -908,7 +910,7 @@ body { overflow: hidden; min-height: 0; }
 .ai-body .items-list { grid-template-columns: 1fr; gap: 0.6rem; }
 
 /* ── Composer (bottom) ───────────────────────────────────────────── */
-.composer-wrap { flex-shrink: 0; padding: 0.5rem 1.5rem 1rem; background: linear-gradient(to top, var(--bg) 55%, rgba(4,6,10,0)); }
+.composer-wrap { flex-shrink: 0; padding: 0.5rem 1.5rem calc(1rem + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 55%, rgba(4,6,10,0)); }
 .composer { max-width: var(--composer-w); margin: 0 auto; }
 .composer .search-box { border-radius: 14px; }
 .tools-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.55rem; padding: 0 0.2rem; flex-wrap: wrap; }
