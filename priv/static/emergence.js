@@ -1203,7 +1203,10 @@ function showRaster(body, card) {
       const rms = Math.sqrt(sum / buf.length);
       const now = performance.now(), elapsed = now - t0;
       if (elapsed < CAL_MS) { noise = (noise * calN + rms) / (calN + 1); calN++; }
-      const speechThr = Math.max(0.02, noise * 3), silenceThr = Math.max(0.012, noise * 2);
+      /* Lower floors: autoGainControl is off now, so raw-mic speech sits lower;
+       * the old 0.02/0.012 floors meant speech never crossed the threshold and
+       * the silence auto-stop never armed. */
+      const speechThr = Math.max(0.008, noise * 3), silenceThr = Math.max(0.004, noise * 2);
       if (rms > speechThr) { spoke = true; silenceStart = 0; setStatus(T('recording — pause to send'), true); }
       else if (spoke && rms < silenceThr) { if (!silenceStart) silenceStart = now; else if (now - silenceStart > SILENCE_MS && elapsed > MIN_MS) { recorder.stop(); return; } }
       else if (spoke) { silenceStart = 0; }
