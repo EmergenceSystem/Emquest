@@ -1228,12 +1228,7 @@ function showRaster(body, card) {
       if (!window.EmquestSTT) { setStatus(T('voice model unavailable')); return; }
       setStatus(T('local · loading model…'), true);
       try {
-        const blob = new Blob(chunks);
-        const pcm = await blobToPcm16k(blob);
-        /* TEMP diagnostic: surface what was actually captured. */
-        let _s = 0, _pk = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); _s += pcm[i]*pcm[i]; if (a > _pk) _pk = a; }
-        const _dbg = { blobBytes: blob.size, chunks: chunks.length, durS: +(pcm.length/16000).toFixed(2), rms: +Math.sqrt(_s/(pcm.length||1)).toFixed(4), peak: +_pk.toFixed(3) };
-        console.log('[emquest] stt capture', _dbg);
+        const pcm = await blobToPcm16k(new Blob(chunks));
         const lang = (window.EmquestI18n && window.EmquestI18n.current && window.EmquestI18n.current()) || 'en';
         const text = await window.EmquestSTT.transcribe(pcm, {
           language: lang,
@@ -1242,10 +1237,8 @@ function showRaster(body, card) {
         if (text && text.trim()) {
           input.value = text.trim();
           input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.focus();
-        }
-        /* TEMP: keep the diagnostic visible instead of clearing/'nothing heard'. */
-        setStatus('dbg ' + _dbg.durS + 's rms=' + _dbg.rms + ' pk=' + _dbg.peak + ' blob=' + _dbg.blobBytes + 'B → "' + (text||'∅') + '"');
+          input.focus(); setStatus('');
+        } else { setStatus(T('nothing heard')); }
       } catch (e) { console.warn('[emquest] stt', e); setStatus(T('voice model unavailable')); }
     };
     recorder.start();
