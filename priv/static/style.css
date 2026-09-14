@@ -842,7 +842,7 @@ body { overflow: hidden; min-height: 0; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ── Main column ─────────────────────────────────────────────────── */
-.col { display: flex; flex-direction: column; min-height: 0; position: relative; }
+.col { display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
 .topbar {
     height: var(--topbar-h); flex-shrink: 0;
     display: flex; align-items: center; justify-content: flex-end; gap: 0.8rem;
@@ -852,7 +852,7 @@ body { overflow: hidden; min-height: 0; }
 }
 
 /* ── Flux ────────────────────────────────────────────────────────── */
-.flux { flex: 1; overflow-y: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+.flux { flex: 1; overflow-y: auto; min-height: 0; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
 .flux-inner { max-width: var(--composer-w); margin: 0 auto; padding: 1.6rem 1.5rem 1.5rem; }
 .turn { margin-bottom: 1.8rem; }
 
