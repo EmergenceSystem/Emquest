@@ -12,7 +12,7 @@
  */
 import { pipeline, env } from '/static/vendor/transformers.js';
 
-const MODEL    = 'onnx-community/whisper-small';   /* multilingual */
+const MODEL    = 'onnx-community/whisper-large-v3-turbo';   /* multilingual, robust */
 const PREF_KEY = 'emquest.slm.enabled';            /* shared on-device-AI toggle */
 
 /* Self-host the ONNX runtime wasm (CSP: no external hosts); fetch weights from
@@ -53,7 +53,9 @@ async function ensurePipe(onProgress) {
         const device = (await hasWebGPU()) ? 'webgpu' : 'wasm';
         return pipeline('automatic-speech-recognition', MODEL, {
             device,
-            dtype: device === 'webgpu' ? 'fp16' : 'q8',
+            /* turbo: fp16 encoder (quality) + q4 decoder (size/speed) on WebGPU;
+             * q8 on the WASM fallback. */
+            dtype: device === 'webgpu' ? { encoder_model: 'fp16', decoder_model_merged: 'q4' } : 'q8',
             progress_callback: (p) => {
                 if (onProgress && p && typeof p.progress === 'number') onProgress(p.progress / 100, p.status || '');
             },
