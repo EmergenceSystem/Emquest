@@ -1276,6 +1276,9 @@ function showRaster(body, card) {
         const rendered = await off.startRendering();
         pcm = rendered.getChannelData(0).slice();
     }
+    /* Drop the first ~250 ms: the mic-button click is captured as a loud
+     * transient that dominates normalization and confuses the model. */
+    if (pcm.length > 8000) pcm = pcm.slice(4000);
     /* Normalise by RMS, not peak: a single transient (a button pop) pins the
      * peak and leaves quiet speech untouched, so scale to a target loudness and
      * clip the transient instead. Gain capped; near-silence left alone. */
