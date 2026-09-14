@@ -1193,8 +1193,15 @@ function showRaster(body, card) {
   }
   micBtn.addEventListener('click', async () => {
     if (recording) { recorder && recorder.stop(); return; }
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (_) { setStatus(T('mic access denied')); return; }
+    /* Raw mic: the browser's call-oriented DSP (noise suppression / AGC / echo
+     * cancellation) mangles speech for ASR — disable it. Fall back to defaults
+     * if the constraints are rejected. */
+    const rawConstraints = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } };
+    try { stream = await navigator.mediaDevices.getUserMedia(rawConstraints); }
+    catch (_) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch (_2) { setStatus(T('mic access denied')); return; }
+    }
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
@@ -1252,13 +1259,17 @@ function showRaster(body, card) {
         const rendered = await off.startRendering();
         pcm = rendered.getChannelData(0).slice();
     }
-    /* Normalise quiet mics: scale so the peak sits near 0.95 (helps whisper on
-     * low-gain input). Skip near-silence to avoid amplifying noise. */
-    let peak = 0;
-    for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
-    if (peak > 0.02 && peak < 0.95) {
-        const g = 0.95 / peak;
-        for (let i = 0; i < pcm.length; i++) pcm[i] *= g;
+    /* Normalise by RMS, not peak: a single transient (a button pop) pins the
+     * peak and leaves quiet speech untouched, so scale to a target loudness and
+     * clip the transient instead. Gain capped; near-silence left alone. */
+    let sq = 0; for (let i = 0; i < pcm.length; i++) sq += pcm[i] * pcm[i];
+    const rms = Math.sqrt(sq / (pcm.length || 1));
+    if (rms > 0.003 && rms < 0.12) {
+        const g = Math.min(0.12 / rms, 30);
+        for (let i = 0; i < pcm.length; i++) {
+            const x = pcm[i] * g;
+            pcm[i] = x > 1 ? 1 : (x < -1 ? -1 : x);
+        }
     }
     return pcm;
   }
