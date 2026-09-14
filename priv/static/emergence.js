@@ -1285,14 +1285,13 @@ function showRaster(body, card) {
     let sq = 0; for (let i = 0; i < pcm.length; i++) sq += pcm[i] * pcm[i];
     const rms = Math.sqrt(sq / (pcm.length || 1));
     if (rms > 0.003 && rms < 0.1) {
-        const g = Math.min(0.1 / rms, 20);
+        const g = Math.min(0.1 / rms, 30);
         for (let i = 0; i < pcm.length; i++) pcm[i] *= g;
     }
-    /* Global peak limit (NOT per-sample hard clip): clipping distorts the audio
-     * and makes whisper hallucinate/repeat. Scale the whole buffer down if a
-     * transient exceeds 0.97. */
-    let peak = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
-    if (peak > 0.97) { const s = 0.97 / peak; for (let i = 0; i < pcm.length; i++) pcm[i] *= s; }
+    /* Soft limiter (tanh): tame the odd transient without a global peak scale
+     * (which suffocated quiet speech) or hard clipping (which made whisper
+     * loop). Near-linear for speech-level samples, smoothly squashes spikes. */
+    for (let i = 0; i < pcm.length; i++) pcm[i] = Math.tanh(pcm[i]);
     return pcm;
   }
 })();
