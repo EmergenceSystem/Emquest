@@ -499,6 +499,9 @@ a.item-title:hover,
     /* Tighter result cards + filter row on mobile. */
     .item-card { padding: 0.85rem 0.95rem; }
     .type-filters { gap: 12px; }
+    /* Let the media-type checkboxes wrap instead of overflowing the viewport. */
+    .tools-row { row-gap: 0.4rem; }
+    .tools-row .type-filters { flex-wrap: wrap; row-gap: 6px; min-width: 0; margin-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
