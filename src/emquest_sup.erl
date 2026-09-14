@@ -42,7 +42,7 @@
 -module(emquest_sup).
 -behaviour(supervisor).
 
--export([start_link/0, init/1]).
+-export([start_link/0, init/1, mime/1]).
 
 %% @doc Start the top-level supervisor.
 %% @end
@@ -90,7 +90,8 @@ init([]) ->
                     {"/admin/reports",  emquest_handler, admin_reports},
                     {"/report",         emquest_handler, report},
                     {"/favicon.ico",    cowboy_static,   {priv_file, emquest, "static/favicon.ico"}},
-                    {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static"}}
+                    {"/static/[...]",   cowboy_static,   {priv_dir,  emquest, "static",
+                                                          [{mimetypes, ?MODULE, mime}]}}
                 ]}
             ]),
             %% `idle_timeout' raised from cowboy's 60s default: `/query'
@@ -141,6 +142,20 @@ init([]) ->
 %%====================================================================
 %% Internal
 %%====================================================================
+
+%% @doc MIME types for cowboy_static. cow_mimetypes doesn't know `.mjs`
+%% (ES module) or `.wasm`, so it serves them as application/octet-stream —
+%% which browsers refuse to import as modules / streaming-compile. Map those
+%% explicitly (needed by the on-device STT: transformers.js + onnxruntime-web),
+%% and fall back to cow_mimetypes for everything else.
+-spec mime(binary()) -> {binary(), binary(), []}.
+mime(Path) ->
+    case filename:extension(Path) of
+        <<".mjs">>  -> {<<"text">>, <<"javascript">>, []};
+        <<".js">>   -> {<<"text">>, <<"javascript">>, []};
+        <<".wasm">> -> {<<"application">>, <<"wasm">>, []};
+        _           -> cow_mimetypes:all(Path)
+    end.
 
 %% @private
 %% @doc Returns `true' if HTTP mode is enabled.
