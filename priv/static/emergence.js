@@ -1161,6 +1161,27 @@ function showRaster(body, card) {
   const input  = document.getElementById('query-input');
   const status = document.getElementById('meta-status');
   if (!micBtn || !input) return;
+
+  /* Mic gating: greyed + disabled until the on-device STT model has loaded
+   * (preloaded at boot). stt.js broadcasts 'emquest-stt' {status, progress}. */
+  function setMic(state, pct) {
+    if (state === 'ready') {
+      micBtn.disabled = false; micBtn.classList.remove('stt-loading', 'stt-off');
+      micBtn.title = 'Dictate your query';
+    } else if (state === 'error') {
+      micBtn.disabled = true; micBtn.classList.remove('stt-loading'); micBtn.classList.add('stt-off');
+      micBtn.title = T('voice model unavailable');
+    } else {
+      micBtn.disabled = true; micBtn.classList.remove('stt-off'); micBtn.classList.add('stt-loading');
+      micBtn.title = T('local · loading model') + (pct ? ' ' + Math.round(pct * 100) + '%' : '…');
+    }
+  }
+  setMic(window.EmquestSTT && window.EmquestSTT.isReady && window.EmquestSTT.isReady() ? 'ready' : 'loading');
+  window.addEventListener('emquest-stt', (e) => {
+    const d = e.detail || {};
+    setMic(d.status === 'ready' ? 'ready' : (d.status === 'error' ? 'error' : 'loading'), d.progress);
+  });
+
   let recorder = null, chunks = [], stream = null, recording = false;
   let vadRAF = null, vadCtx = null;
   const setStatus = (m, rec) => { if (!status) return; status.textContent = m || ''; status.classList.toggle('rec', !!rec); };
@@ -1192,6 +1213,7 @@ function showRaster(body, card) {
     vadRAF = requestAnimationFrame(tick);
   }
   micBtn.addEventListener('click', async () => {
+    if (micBtn.disabled) return;
     if (recording) { recorder && recorder.stop(); return; }
     /* Browser DSP (noise suppression / AGC / echo cancellation) ON — it cleans
      * real-room noise, which helps whisper more than raw mic does. */

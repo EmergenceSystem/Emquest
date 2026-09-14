@@ -532,6 +532,10 @@ a.item-title:hover,
 .mic-btn:hover { background: rgba(0, 255, 160, 0.10); color: var(--neon); border-color: rgba(0, 255, 160, 0.5); }
 .mic-btn svg { width: 18px; height: 18px; }
 .mic-btn.recording { color: #ff4b4b; animation: micpulse 1s ease-in-out infinite; }
+/* Disabled until the on-device voice model has loaded. */
+.mic-btn:disabled { cursor: not-allowed; opacity: 0.35; }
+.mic-btn.stt-loading { animation: micpulse 1.6s ease-in-out infinite; }
+.mic-btn.stt-off { opacity: 0.3; }
 @keyframes micpulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 .raster-card {

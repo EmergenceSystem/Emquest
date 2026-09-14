@@ -31,7 +31,13 @@ const LANG_CODES = {
 };
 function langToWhisper(name) { return (!name || name === 'en') ? undefined : LANG_CODES[name]; }
 
-let _support = null, _pipe = null;
+let _support = null, _pipe = null, _ready = false;
+
+/* Broadcast STT lifecycle so the UI can gate the mic button. */
+function signal(status, progress) {
+    try { window.dispatchEvent(new CustomEvent('emquest-stt', { detail: { status, progress: progress || 0 } })); } catch (_) {}
+}
+function isReady() { return _ready; }
 
 async function supported() {
     if (_support !== null) return _support;
@@ -57,20 +63,23 @@ async function ensurePipe(onProgress) {
              * q8 on the WASM fallback. */
             dtype: device === 'webgpu' ? { encoder_model: 'fp16', decoder_model_merged: 'q4' } : 'q8',
             progress_callback: (p) => {
-                if (onProgress && p && typeof p.progress === 'number') onProgress(p.progress / 100, p.status || '');
+                const frac = (p && typeof p.progress === 'number') ? p.progress / 100 : 0;
+                if (onProgress) onProgress(frac, (p && p.status) || '');
+                signal('loading', frac);
             },
         });
     })();
+    _pipe.then(() => { _ready = true; signal('ready', 1); },
+               () => { _pipe = null; signal('error', 0); });
     return _pipe;
 }
 
 async function preload(handlers) {
     handlers = handlers || {};
     try {
-        if (!enabled()) return;
-        if (!(await supported())) return;
+        if (!enabled() || !(await supported())) { signal('error', 0); return; }
         await ensurePipe(handlers.onProgress);
-    } catch (_) { /* best-effort */ }
+    } catch (_) { signal('error', 0); }
 }
 
 async function transcribe(pcm16k, handlers) {
@@ -86,7 +95,7 @@ async function transcribe(pcm16k, handlers) {
     return String(text).trim();
 }
 
-window.EmquestSTT = { supported, enabled, preload, transcribe, langToWhisper, MODEL };
+window.EmquestSTT = { supported, enabled, preload, transcribe, langToWhisper, isReady, MODEL };
 
 /* Preload the model at boot when enabled + supported (accepted first-load cost
  * alongside the SLM). */
