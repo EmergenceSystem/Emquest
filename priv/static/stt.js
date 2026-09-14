@@ -86,9 +86,12 @@ async function transcribe(pcm16k, handlers) {
     handlers = handlers || {};
     if (!(await supported())) throw new Error('stt unsupported');
     const pipe = await ensurePipe(handlers.onProgress);
-    const opts = { chunk_length_s: 30, stride_length_s: 5 };
+    /* Always transcribe (never translate): without an explicit task, French
+     * speech came back as English. Language is auto-detected unless the UI
+     * language maps to a Whisper code. */
+    const opts = { chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
     const lang = langToWhisper(handlers.language);
-    if (lang) { opts.language = lang; opts.task = 'transcribe'; }
+    if (lang) opts.language = lang;
     if (handlers.opts) Object.assign(opts, handlers.opts);   /* debug override */
     const out = await pipe(pcm16k, opts);
     const text = (out && (Array.isArray(out) ? out[0] && out[0].text : out.text)) || '';
