@@ -1183,7 +1183,7 @@ function showRaster(body, card) {
       const now = performance.now(), elapsed = now - t0;
       if (elapsed < CAL_MS) { noise = (noise * calN + rms) / (calN + 1); calN++; }
       const speechThr = Math.max(0.02, noise * 3), silenceThr = Math.max(0.012, noise * 2);
-      if (rms > speechThr) { spoke = true; silenceStart = 0; setStatus('recording — pause to send', true); }
+      if (rms > speechThr) { spoke = true; silenceStart = 0; setStatus(T('recording — pause to send'), true); }
       else if (spoke && rms < silenceThr) { if (!silenceStart) silenceStart = now; else if (now - silenceStart > SILENCE_MS && elapsed > MIN_MS) { recorder.stop(); return; } }
       else if (spoke) { silenceStart = 0; }
       if (elapsed > MAX_MS) { recorder.stop(); return; }
@@ -1194,51 +1194,53 @@ function showRaster(body, card) {
   micBtn.addEventListener('click', async () => {
     if (recording) { recorder && recorder.stop(); return; }
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (_) { setStatus('mic access denied'); return; }
+    catch (_) { setStatus(T('mic access denied')); return; }
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     recorder.onstop = async () => {
       recording = false; micBtn.classList.remove('recording');
       stopVad(); stream.getTracks().forEach(t => t.stop());
-      setStatus('transcribing...', true);
+      if (!window.EmquestSTT) { setStatus(T('voice model unavailable')); return; }
+      setStatus(T('local · loading model…'), true);
       try {
-        const wav = await blobToWav16k(new Blob(chunks));
-        const fd = new FormData(); fd.append('file', wav, 'audio.wav');
-        const r = await fetch('/stt', { method: 'POST', body: fd });
-        if (!r.ok) { setStatus('stt unavailable'); return; }
-        const { text } = await r.json();
-        if (text && text.trim()) { input.value = text.trim(); input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); setStatus(''); }
-        else { setStatus('nothing heard'); }
-      } catch (_) { setStatus('stt failed'); }
+        const pcm = await blobToPcm16k(new Blob(chunks));
+        const lang = (window.EmquestI18n && window.EmquestI18n.current && window.EmquestI18n.current()) || 'en';
+        const text = await window.EmquestSTT.transcribe(pcm, {
+          language: lang,
+          onProgress: (p) => setStatus(T('local · loading model') + ' ' + Math.round((p || 0) * 100) + '%', true),
+        });
+        if (text && text.trim()) {
+          input.value = text.trim();
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.focus(); setStatus('');
+        } else { setStatus(T('nothing heard')); }
+      } catch (e) { console.warn('[emquest] stt', e); setStatus(T('voice model unavailable')); }
     };
     recorder.start();
     recording = true; micBtn.classList.add('recording');
-    setStatus('listening — speak, then pause to send', true);
+    setStatus(T('listening — speak, then pause to send'), true);
     startVad(stream);
   });
-  async function blobToWav16k(blob) {
+  /* Decode a recorded blob to a 16 kHz mono Float32Array for on-device STT. */
+  async function blobToPcm16k(blob) {
     const buf = await blob.arrayBuffer();
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
-    const decoded = await ctx.decodeAudioData(buf);
-    const mono = downmixMono(decoded), res = resample(mono, decoded.sampleRate, 16000);
-    ctx.close();
-    return encodeWav(res, 16000);
-  }
-  function downmixMono(ab) { const n = ab.length, out = new Float32Array(n); for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / ab.numberOfChannels; } return out; }
-  function resample(data, from, to) { if (from === to) return data; const ratio = from / to, n = Math.round(data.length / ratio), out = new Float32Array(n); for (let i = 0; i < n; i++) { const idx = i * ratio, i0 = Math.floor(idx), i1 = Math.min(i0 + 1, data.length - 1); out[i] = data[i0] + (data[i1] - data[i0]) * (idx - i0); } return out; }
-  function encodeWav(samples, rate) {
-    const buf = new ArrayBuffer(44 + samples.length * 2), view = new DataView(buf);
-    const wr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
-    wr(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); wr(8, 'WAVE');
-    wr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, rate, true);
-    view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    wr(36, 'data'); view.setUint32(40, samples.length * 2, true);
-    let o = 44;
-    for (let i = 0; i < samples.length; i++, o += 2) { const s = Math.max(-1, Math.min(1, samples[i])); view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
-    return new Blob([view], { type: 'audio/wav' });
+    try {
+        const audio = await ctx.decodeAudioData(buf);
+        const ch = audio.getChannelData(0);
+        const sr = audio.sampleRate;
+        if (sr === 16000) return Float32Array.from(ch);
+        const ratio = 16000 / sr;
+        const outLen = Math.round(ch.length * ratio);
+        const out = new Float32Array(outLen);
+        for (let i = 0; i < outLen; i++) {
+            const p = i / ratio, i0 = Math.floor(p), i1 = Math.min(i0 + 1, ch.length - 1);
+            out[i] = ch[i0] * (1 - (p - i0)) + ch[i1] * (p - i0);
+        }
+        return out;
+    } finally { try { ctx.close(); } catch (_) {} }
   }
 })();
 

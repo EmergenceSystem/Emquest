@@ -203,16 +203,6 @@ init(Req0, media) ->
 %% whole warp. Returns {status:processing} | a done raster card | {status:error}.
 init(Req0, media_prepare) ->
     emquest_media:prepare(Req0, cowboy_req:binding(id, Req0));
-init(Req0, stt) ->
-    case cowboy_req:method(Req0) of
-        <<"POST">> ->
-            case emquest_ratelimit:allow(client_ip(Req0), 5, 60) of
-                false -> too_many(Req0, stt);
-                true  -> emquest_media:stt_do(Req0)
-            end;
-        _ ->
-            bad_method(Req0, stt)
-    end;
 
 %% /admin — static shell page (ungated shell; the DATA endpoints below are gated).
 init(Req0, admin_index) ->

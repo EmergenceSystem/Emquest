@@ -1,13 +1,14 @@
 %%%-------------------------------------------------------------------
-%%% @doc emquest_media — image and speech-to-text proxy routes.
+%%% @doc emquest_media — image upload/proxy routes.
 %%%
 %%% Split out of `emquest_handler'. Handles:
 %%%   POST /media              — an uploaded image (multipart) or an
 %%%                              image URL ({"url":...}), routed to velora
 %%%                              and answered with a raster card.
 %%%   GET  /media/prepare/:id  — proxy one poll of velora's async render.
-%%%   POST /stt                — an uploaded audio clip, forwarded to the
-%%%                              whisper.cpp inference endpoint.
+%%%
+%%% (Speech-to-text now runs on-device in the browser; the former
+%%% server-side POST /stt route and its whisper.cpp proxy were removed.)
 %%%
 %%% The route dispatch, method check and rate-limiting stay in
 %%% `emquest_handler'; each entry point here returns the Cowboy
@@ -16,7 +17,7 @@
 %%%-------------------------------------------------------------------
 -module(emquest_media).
 
--export([media_post/1, prepare/2, stt_do/1, parse_stt_text/1]).
+-export([media_post/1, prepare/2]).
 
 %%====================================================================
 %% Route entry points
@@ -34,22 +35,6 @@ media_post(Req0) ->
 prepare(Req0, Id) ->
     {Code, Body} = velora_prepare_poll(Id),
     {ok, cowboy_req:reply(Code, media_ct(), json:encode(Body), Req0), media_prepare}.
-
-stt_do(Req0) ->
-    case read_upload(Req0) of
-        {ok, _Filename, Bytes, Req1} ->
-            case stt_forward(<<"audio.wav">>, Bytes) of
-                {ok, Text} ->
-                    {ok, cowboy_req:reply(200, media_ct(),
-                        json:encode(#{<<"text">> => Text}), Req1), stt};
-                {error, Reason} ->
-                    {ok, cowboy_req:reply(502, media_ct(),
-                        json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
-            end;
-        {error, Reason, Req1} ->
-            {ok, cowboy_req:reply(400, media_ct(),
-                json:encode(#{<<"error">> => media_ebin(Reason)}), Req1), stt}
-    end.
 
 %%====================================================================
 %% Media (image -> velora)
@@ -100,40 +85,6 @@ media_err(Req, Code, Reason) ->
 media_ct() -> #{<<"content-type">> => <<"application/json">>}.
 media_ebin(B) when is_binary(B) -> B;
 media_ebin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
-
-%%====================================================================
-%% Speech to text (audio -> whisper.cpp)
-%%====================================================================
-
-stt_base() -> application:get_env(emquest, stt_url, "http://127.0.0.1:8086").
-
-stt_forward(Filename, Bytes) ->
-    {Boundary, MBody} = build_stt_multipart(Filename, Bytes),
-    CT = "multipart/form-data; boundary=" ++ Boundary,
-    case httpc:request(post,
-                       {stt_base() ++ "/inference", [], CT, MBody},
-                       [{timeout, 30000}], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _Hdrs, Body}} -> {ok, parse_stt_text(Body)};
-        {ok, {{_, Code, _}, _, _}}        -> {error, iolist_to_binary(io_lib:format("stt ~w", [Code]))};
-        {error, R}                        -> {error, R}
-    end.
-
-%% whisper.cpp /inference returns {"text": "..."}.
-parse_stt_text(Body) ->
-    case (try json:decode(Body) catch _:_ -> #{} end) of
-        #{<<"text">> := T} when is_binary(T) -> string:trim(T);
-        _ -> <<>>
-    end.
-
-build_stt_multipart(Filename, Bytes) ->
-    Boundary = "emqstt" ++ integer_to_list(erlang:unique_integer([positive])),
-    Body = iolist_to_binary([
-        "--", Boundary, "\r\n",
-        "Content-Disposition: form-data; name=\"file\"; filename=\"", Filename, "\"\r\n",
-        "Content-Type: audio/wav\r\n\r\n",
-        Bytes, "\r\n",
-        "--", Boundary, "--\r\n"]),
-    {Boundary, Body}.
 
 %%====================================================================
 %% Multipart upload reading

@@ -80,7 +80,6 @@ init([]) ->
                     {"/network/peers",  emquest_handler, network_peers},
                     {"/health",         emquest_handler, health},
                     {"/status",         emquest_handler, status},
-                    {"/stt",            emquest_handler, stt},
                     {"/admin",          emquest_handler, admin_index},
                     {"/admin/me",       emquest_handler, admin_me},
                     {"/admin/nav",      emquest_handler, admin_nav},

@@ -56,3 +56,7 @@ mnesia_test_data/
 
 # runtime em_pop DETS store
 priv/state/
+
+# STT: large vendored third-party assets — provisioned on the server, not committed
+priv/static/vendor/transformers.js
+priv/static/vendor/ort/

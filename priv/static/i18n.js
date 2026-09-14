@@ -83,12 +83,14 @@
         'Apply', 'Language',
         'result', 'results', 'aggregated', 'top domain',
         'DNS record', 'DNS records', 'media item', 'media items',
+        'voice model unavailable', 'nothing heard', 'mic access denied',
+        'listening — speak, then pause to send', 'recording — pause to send',
     ];
     const _seen = new Set(JS_STRINGS);
 
     /* Bump when the curated dictionaries (i18n_dict.js) change, to invalidate
      * per-language caches that were built against the old translations. */
-    const I18N_REV = '3';
+    const I18N_REV = '4';
     /* Normalise a source for dictionary lookup: HTML markup emits &nbsp;
      * (U+00A0) which reaches the DOM as a non-breaking space; dictionary keys
      * are written with plain spaces, so fold it before matching. */
