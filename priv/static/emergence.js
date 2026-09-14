@@ -1358,3 +1358,32 @@ function closeSettings() { const m = document.getElementById('settings-modal'); 
 initTypeFilters();
 restoreMediaTypes();
 initBudget().then(renderSidebar);
+
+/* ================================================================== */
+/* Mobile burger — open/close the sidebar drawer                       */
+/* ================================================================== */
+(function () {
+    const burger   = document.getElementById('burger-btn');
+    const sidebar  = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (!burger || !sidebar) return;
+    const isOpen = () => sidebar.classList.contains('open');
+    function open() {
+        sidebar.classList.add('open');
+        if (backdrop) backdrop.hidden = false;
+        burger.setAttribute('aria-expanded', 'true');
+    }
+    function close() {
+        sidebar.classList.remove('open');
+        if (backdrop) backdrop.hidden = true;
+        burger.setAttribute('aria-expanded', 'false');
+    }
+    burger.addEventListener('click', () => (isOpen() ? close() : open()));
+    if (backdrop) backdrop.addEventListener('click', close);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
+    /* Close the drawer when a sidebar action navigates or opens a modal
+     * (the settings/confirm modals sit below the drawer's z-index). */
+    sidebar.addEventListener('click', (e) => {
+        if (e.target.closest('#new-search-btn, #settings-btn, .conv')) close();
+    });
+})();

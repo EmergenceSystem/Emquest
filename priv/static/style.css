@@ -943,8 +943,45 @@ body { overflow: hidden; min-height: 0; }
 .flux .empty-state { padding: 3rem 1.25rem 2rem; }
 
 /* ── Responsive: collapse sidebar on narrow screens ──────────────── */
+/* ── Burger + mobile sidebar drawer ──────────────────────────────── */
+.burger {
+    display: none;                       /* desktop: hidden (see @media below) */
+    margin-right: auto;                  /* push to the left of the flex topbar */
+    flex-direction: column; justify-content: center; gap: 4px;
+    width: 34px; height: 34px; padding: 6px 7px;
+    background: transparent; border: 1px solid var(--glass-brd); border-radius: 8px;
+    cursor: pointer;
+}
+.burger span {
+    display: block; height: 2px; width: 100%; border-radius: 2px;
+    background: var(--text); transition: transform 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+.burger:hover { border-color: var(--neon); }
+.burger[aria-expanded="true"] span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.burger[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+.burger[aria-expanded="true"] span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+.sidebar-backdrop {
+    position: fixed; inset: 0; z-index: 290;
+    background: rgba(2, 8, 6, 0.6); backdrop-filter: blur(3px);
+    animation: fadeIn 0.18s var(--ease) both;
+}
+.sidebar-backdrop[hidden] { display: none; }
+
 @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; }
-    .sidebar { display: none; }
+    .burger { display: flex; }
+    /* Sidebar becomes an off-canvas drawer, opened by the burger. */
+    .sidebar {
+        display: flex;
+        position: fixed; top: 0; left: 0; bottom: 0;
+        width: min(84vw, 320px); z-index: 300;
+        transform: translateX(-100%);
+        transition: transform 0.28s var(--ease);
+    }
+    .sidebar.open { transform: translateX(0); box-shadow: 0 0 44px rgba(0, 0, 0, 0.6); }
     .flux-inner, .composer { padding-left: 1rem; padding-right: 1rem; }
 }
+
+/* Desktop: no backdrop even if the flag lingers. */
+@media (min-width: 761px) { .sidebar-backdrop { display: none; } }

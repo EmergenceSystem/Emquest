@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergence</title>
     <link rel="stylesheet" href="/static/vendor/leaflet.css">
-    <link rel="stylesheet" href="/static/style.css?v=51">
+    <link rel="stylesheet" href="/static/style.css?v=52">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -58,10 +58,17 @@
             </div>
         </aside>
 
+        <!-- Mobile drawer backdrop (shown when the sidebar is open on narrow screens) -->
+        <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
         <!-- ── Main column: topbar + scrollable flux + composer ────── -->
         <div class="col">
 
             <header class="topbar" id="app-header">
+                <button class="burger" id="burger-btn" type="button" aria-label="Menu" title="Menu"
+                        data-i18n-attr="aria-label,title" aria-expanded="false" aria-controls="sidebar">
+                    <span></span><span></span><span></span>
+                </button>
                 <a href="/drift" class="drift-link">drift ↗</a>
                 <span class="pulse-dot"></span>
                 <span id="clock" class="clock"></span>
@@ -184,9 +191,9 @@
     </div>
 
     <script src="/static/vendor/leaflet.js"></script>
-    <script src="/static/emergence.js?v=54"></script>
-    <script src="/static/i18n_dict.js?v=2"></script>
-    <script src="/static/i18n.js?v=3"></script>
+    <script src="/static/emergence.js?v=55"></script>
+    <script src="/static/i18n_dict.js?v=3"></script>
+    <script src="/static/i18n.js?v=4"></script>
     <script src="/static/ui_dialog.js?v=1"></script>
     <script type="module" src="/static/slm.js?v=5"></script>
 </body>

@@ -88,7 +88,7 @@
 
     /* Bump when the curated dictionaries (i18n_dict.js) change, to invalidate
      * per-language caches that were built against the old translations. */
-    const I18N_REV = '2';
+    const I18N_REV = '3';
     /* Normalise a source for dictionary lookup: HTML markup emits &nbsp;
      * (U+00A0) which reaches the DOM as a non-breaking space; dictionary keys
      * are written with plain spaces, so fold it before matching. */
