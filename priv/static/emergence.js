@@ -1215,10 +1215,16 @@ function showRaster(body, card) {
   micBtn.addEventListener('click', async () => {
     if (micBtn.disabled) return;
     if (recording) { recorder && recorder.stop(); return; }
-    /* Browser DSP (noise suppression / AGC / echo cancellation) ON — it cleans
-     * real-room noise, which helps whisper more than raw mic does. */
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }); }
-    catch (_) { setStatus(T('mic access denied')); return; }
+    /* echoCancellation uses the system/other-tab render stream as its reference
+     * and mangles the mic when e.g. YouTube plays in another tab (even on a
+     * headset with no acoustic echo) — disable it, and autoGainControl (pumps).
+     * Keep noiseSuppression: it cleans room noise without referencing playback. */
+    const constraints = { audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: true, channelCount: 1 } };
+    try { stream = await navigator.mediaDevices.getUserMedia(constraints); }
+    catch (_) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch (_2) { setStatus(T('mic access denied')); return; }
+    }
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
