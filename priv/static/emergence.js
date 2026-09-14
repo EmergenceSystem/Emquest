@@ -1226,21 +1226,34 @@ function showRaster(body, card) {
   async function blobToPcm16k(blob) {
     const buf = await blob.arrayBuffer();
     const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC();
-    try {
-        const audio = await ctx.decodeAudioData(buf);
-        const ch = audio.getChannelData(0);
-        const sr = audio.sampleRate;
-        if (sr === 16000) return Float32Array.from(ch);
-        const ratio = 16000 / sr;
-        const outLen = Math.round(ch.length * ratio);
-        const out = new Float32Array(outLen);
-        for (let i = 0; i < outLen; i++) {
-            const p = i / ratio, i0 = Math.floor(p), i1 = Math.min(i0 + 1, ch.length - 1);
-            out[i] = ch[i0] * (1 - (p - i0)) + ch[i1] * (p - i0);
-        }
-        return out;
-    } finally { try { ctx.close(); } catch (_) {} }
+    const dctx = new AC();
+    let decoded;
+    try { decoded = await dctx.decodeAudioData(buf); }
+    finally { try { dctx.close(); } catch (_) {} }
+    let pcm;
+    if (decoded.sampleRate === 16000 && decoded.numberOfChannels === 1) {
+        pcm = decoded.getChannelData(0).slice();
+    } else {
+        /* Proper resample to 16 kHz mono via OfflineAudioContext — it applies
+         * an anti-alias filter (a naive linear decimation of 48 kHz mic audio
+         * aliases into the speech band and wrecks recognition) and downmixes. */
+        const frames = Math.max(1, Math.ceil(decoded.duration * 16000));
+        const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        const off = new OAC(1, frames, 16000);
+        const node = off.createBufferSource();
+        node.buffer = decoded; node.connect(off.destination); node.start();
+        const rendered = await off.startRendering();
+        pcm = rendered.getChannelData(0).slice();
+    }
+    /* Normalise quiet mics: scale so the peak sits near 0.95 (helps whisper on
+     * low-gain input). Skip near-silence to avoid amplifying noise. */
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+    if (peak > 0.02 && peak < 0.95) {
+        const g = 0.95 / peak;
+        for (let i = 0; i < pcm.length; i++) pcm[i] *= g;
+    }
+    return pcm;
   }
 })();
 
