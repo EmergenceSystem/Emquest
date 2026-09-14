@@ -75,9 +75,19 @@ async function transcribe(pcm16k, handlers) {
     handlers = handlers || {};
     if (!(await supported())) throw new Error('stt unsupported');
     const pipe = await ensurePipe(handlers.onProgress);
-    const opts = { chunk_length_s: 30, stride_length_s: 5 };
+    /* Anti-repetition decoding: whisper collapses into "hello hello hello…"
+     * loops on ambiguous/real-room audio unless repetition is penalised and it
+     * is not conditioned on its own (repeated) previous text. */
+    const opts = {
+        chunk_length_s: 30, stride_length_s: 5,
+        no_repeat_ngram_size: 3,
+        repetition_penalty: 1.2,
+        condition_on_previous_text: false,
+        temperature: 0,
+    };
     const lang = langToWhisper(handlers.language);
     if (lang) { opts.language = lang; opts.task = 'transcribe'; }
+    if (handlers.opts) Object.assign(opts, handlers.opts);   /* debug override */
     const out = await pipe(pcm16k, opts);
     const text = (out && (Array.isArray(out) ? out[0] && out[0].text : out.text)) || '';
     return String(text).trim();
