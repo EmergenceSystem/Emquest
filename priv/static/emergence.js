@@ -1228,12 +1228,17 @@ function showRaster(body, card) {
       if (!window.EmquestSTT) { setStatus(T('voice model unavailable')); return; }
       setStatus(T('local · loading model…'), true);
       try {
-        const pcm = await blobToPcm16k(new Blob(chunks));
+        const blob = new Blob(chunks);
+        const pcm = await blobToPcm16k(blob);
+        let _s = 0, _pk = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); _s += pcm[i]*pcm[i]; if (a > _pk) _pk = a; }
+        const durS = +(pcm.length/16000).toFixed(2), rmsV = +Math.sqrt(_s/(pcm.length||1)).toFixed(4), pkV = +_pk.toFixed(3);
         const lang = (window.EmquestI18n && window.EmquestI18n.current && window.EmquestI18n.current()) || 'en';
         const text = await window.EmquestSTT.transcribe(pcm, {
           language: lang,
           onProgress: (p) => setStatus(T('local · loading model') + ' ' + Math.round((p || 0) * 100) + '%', true),
         });
+        /* Diagnostic on the mic tooltip (hover) — keeps the status line clean. */
+        micBtn.title = durS + 's rms=' + rmsV + ' pk=' + pkV + ' blob=' + blob.size + 'B → "' + (text || '∅') + '"';
         if (text && text.trim()) {
           input.value = text.trim();
           input.dispatchEvent(new Event('input', { bubbles: true }));
