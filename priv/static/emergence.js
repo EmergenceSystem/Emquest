@@ -1193,15 +1193,10 @@ function showRaster(body, card) {
   }
   micBtn.addEventListener('click', async () => {
     if (recording) { recorder && recorder.stop(); return; }
-    /* Raw mic: the browser's call-oriented DSP (noise suppression / AGC / echo
-     * cancellation) mangles speech for ASR — disable it. Fall back to defaults
-     * if the constraints are rejected. */
-    const rawConstraints = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } };
-    try { stream = await navigator.mediaDevices.getUserMedia(rawConstraints); }
-    catch (_) {
-        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-        catch (_2) { setStatus(T('mic access denied')); return; }
-    }
+    /* Browser DSP (noise suppression / AGC / echo cancellation) ON — it cleans
+     * real-room noise, which helps whisper more than raw mic does. */
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }); }
+    catch (_) { setStatus(T('mic access denied')); return; }
     chunks = [];
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
