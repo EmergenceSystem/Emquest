@@ -12,15 +12,16 @@
  */
 import { pipeline, env } from '/static/vendor/transformers.js';
 
-/* Mobile can't afford large-v3-turbo (~1 GB + heavy inference): use the light
- * multilingual whisper-base (~145 MB) there, turbo on desktop. */
+/* Mobile can't afford large-v3-turbo (~1 GB + heavy inference): use the lighter
+ * multilingual whisper-small (~460 MB, far lighter to run) there, turbo on
+ * desktop. (whisper-base was too weak — "Ferrari F40" -> "I am".) */
 const IS_MOBILE = (() => {
     try {
         return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
             || (matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820);
     } catch (_) { return false; }
 })();
-const MODEL    = IS_MOBILE ? 'onnx-community/whisper-base' : 'onnx-community/whisper-large-v3-turbo';
+const MODEL    = IS_MOBILE ? 'onnx-community/whisper-small' : 'onnx-community/whisper-large-v3-turbo';
 const PREF_KEY = 'emquest.slm.enabled';            /* shared on-device-AI toggle */
 
 /* Self-host the ONNX runtime wasm (CSP: no external hosts); fetch weights from
