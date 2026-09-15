@@ -12,7 +12,15 @@
  */
 import { pipeline, env } from '/static/vendor/transformers.js';
 
-const MODEL    = 'onnx-community/whisper-large-v3-turbo';   /* multilingual, robust */
+/* Mobile can't afford large-v3-turbo (~1 GB + heavy inference): use the light
+ * multilingual whisper-base (~145 MB) there, turbo on desktop. */
+const IS_MOBILE = (() => {
+    try {
+        return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+            || (matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820);
+    } catch (_) { return false; }
+})();
+const MODEL    = IS_MOBILE ? 'onnx-community/whisper-base' : 'onnx-community/whisper-large-v3-turbo';
 const PREF_KEY = 'emquest.slm.enabled';            /* shared on-device-AI toggle */
 
 /* Self-host the ONNX runtime wasm (CSP: no external hosts); fetch weights from
@@ -61,7 +69,9 @@ async function ensurePipe(onProgress) {
             device,
             /* turbo: fp16 encoder (quality) + q4 decoder (size/speed) on WebGPU;
              * q8 on the WASM fallback. */
-            dtype: device === 'webgpu' ? { encoder_model: 'fp16', decoder_model_merged: 'q4' } : 'q8',
+            dtype: device === 'webgpu'
+                ? (IS_MOBILE ? 'fp16' : { encoder_model: 'fp16', decoder_model_merged: 'q4' })
+                : 'q8',
             progress_callback: (p) => {
                 const frac = (p && typeof p.progress === 'number') ? p.progress / 100 : 0;
                 if (onProgress) onProgress(frac, (p && p.status) || '');
