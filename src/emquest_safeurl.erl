@@ -9,7 +9,8 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(emquest_safeurl).
--export([check/1, check/2, check_scheme/1, is_blocked_ip/1, host_blocked/1, safe_get/3, safe_post/5]).
+-export([check/1, check/2, check_scheme/1, is_blocked_ip/1, host_blocked/1,
+         safe_get/3, safe_post/5, pin_url/2]).
 
 -define(ALLOWED_SCHEMES, [<<"http">>, <<"https">>]).
 
@@ -113,14 +114,95 @@ is_blocked_ip({_,_,_,_,_,_,_,_}) -> false.
 %% @private embedded IPv4 from the low 32 bits of a mapped/compat/NAT64 address.
 v4_of(G, H) -> {G bsr 8, G band 16#ff, H bsr 8, H band 16#ff}.
 
+%%%===================================================================
+%%% Anti-DNS-rebinding: resolve once, pin the request to that IP
+%%%===================================================================
+%%%
+%%% check/1 and check/2 resolve the host and screen the addresses, but plain
+%%% `httpc:request' then re-resolves the name at connect time — a hostile
+%%% resolver can answer with a public IP during the check and a private IP at
+%%% connect (TOCTOU rebinding). To close that, resolve ONCE here, screen, and
+%%% pin the request to the validated IP: the URL host is rewritten to the IP
+%%% literal, the original name is carried in the `Host' header and — for https
+%%% — as the TLS SNI. Exempt hosts (the co-located loopback mesh) are used as-is
+%%% (no pin, no rebinding risk on loopback), preserving the trusted-mesh path.
+
+%% @private Screen once and decide how to issue the request.
+-spec prepare(binary(), [binary()]) ->
+    {ok, nopin | {pin, binary(), inet:ip_address()}} | {error, term()}.
+prepare(Url, ExemptHosts) ->
+    case check_scheme(Url) of
+        ok ->
+            case host_of(Url) of
+                {ok, Host} ->
+                    case lists:member(string:lowercase(Host), ExemptHosts) of
+                        true  -> {ok, nopin};
+                        false -> resolve_screen_pick(Host)
+                    end;
+                Err -> Err
+            end;
+        Err -> Err
+    end.
+
+resolve_screen_pick(Host) ->
+    HostStr = binary_to_list(Host),
+    A4 = case inet:getaddrs(HostStr, inet)  of {ok, L4} -> L4; _ -> [] end,
+    A6 = case inet:getaddrs(HostStr, inet6) of {ok, L6} -> L6; _ -> [] end,
+    case A4 ++ A6 of
+        []    -> {error, unresolvable};
+        Addrs ->
+            case lists:any(fun is_blocked_ip/1, Addrs) of
+                true  -> {error, blocked_ip};
+                false -> {ok, {pin, Host, hd(Addrs)}}
+            end
+    end.
+
+%% @private Apply the pin decision to the request URL, headers and http opts.
+pin_apply(Url, nopin, Headers, HttpOpts) ->
+    {binary_to_list(Url), Headers, HttpOpts};
+pin_apply(Url, {pin, Host, Ip}, Headers, HttpOpts) ->
+    {PinUrl, HostHdr} = pin_url(Url, Ip),
+    Headers1 = [{"host", HostHdr} | lists:keydelete("host", 1, Headers)],
+    HttpOpts1 = case scheme_of(Url) of
+        <<"https">> ->
+            [{ssl, [{server_name_indication, binary_to_list(Host)},
+                    {verify, verify_none}]} | HttpOpts];
+        _ -> HttpOpts
+    end,
+    {PinUrl, Headers1, HttpOpts1}.
+
+%% @doc Rewrite a URL's host to a resolved IP literal, returning the pinned URL
+%% and the `Host' header value (original name, with port when non-default).
+-spec pin_url(binary(), inet:ip_address()) -> {string(), string()}.
+pin_url(Url, Ip) ->
+    M    = uri_string:parse(Url),
+    Host = maps:get(host, M, <<>>),
+    IpS  = inet:ntoa(Ip),
+    Pinned = uri_string:recompose(M#{host => list_to_binary(IpS)}),
+    HostHdr = case maps:get(port, M, undefined) of
+        undefined -> host_to_list(Host);
+        Port      -> host_to_list(Host) ++ ":" ++ integer_to_list(Port)
+    end,
+    {binary_to_list(iolist_to_binary(Pinned)), HostHdr}.
+
+host_to_list(B) when is_binary(B) -> binary_to_list(B);
+host_to_list(L) when is_list(L)   -> L.
+
+scheme_of(Url) ->
+    case uri_string:parse(Url) of
+        #{scheme := S} -> string:lowercase(S);
+        _              -> <<>>
+    end.
+
 %% @doc SSRF-checked GET. Same shape as the httpc calls it replaces.
 -spec safe_get(binary(), [{string(), string()}], [term()]) ->
     {ok, binary()} | {error, term()}.
 safe_get(Url, Headers, HttpOpts) ->
-    case check(Url) of
-        ok ->
-            case httpc:request(get, {binary_to_list(Url), Headers},
-                               [{autoredirect, false} | HttpOpts],
+    case prepare(Url, []) of
+        {ok, Pin} ->
+            {ReqUrl, Hdrs, Opts} = pin_apply(Url, Pin, Headers, HttpOpts),
+            case httpc:request(get, {ReqUrl, Hdrs},
+                               [{autoredirect, false} | Opts],
                                [{body_format, binary}]) of
                 {ok, {{_, 200, _}, _, Bytes}} -> {ok, Bytes};
                 {ok, {{_, C,   _}, _, _}}     -> {error, {http, C}};
@@ -138,11 +220,12 @@ safe_get(Url, Headers, HttpOpts) ->
 safe_post(Url, Headers, ContentType, Body, HttpOpts) ->
     Exempt = application:get_env(emquest, fetch_guard_exempt_hosts,
                                  [<<"localhost">>, <<"127.0.0.1">>, <<"::1">>]),
-    case check(Url, Exempt) of
-        ok ->
+    case prepare(Url, Exempt) of
+        {ok, Pin} ->
+            {ReqUrl, Hdrs, Opts} = pin_apply(Url, Pin, Headers, HttpOpts),
             case httpc:request(post,
-                               {binary_to_list(Url), Headers, ContentType, Body},
-                               [{autoredirect, false} | HttpOpts],
+                               {ReqUrl, Hdrs, ContentType, Body},
+                               [{autoredirect, false} | Opts],
                                [{body_format, binary}]) of
                 {ok, {{_, 200, _}, _, Bytes}} ->
                     Max = application:get_env(emquest, filter_max_response_bytes, 2000000),

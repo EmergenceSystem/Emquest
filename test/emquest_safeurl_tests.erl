@@ -92,3 +92,26 @@ check2_exempts_listed_host_test() ->
     %% exemption never bypasses the scheme allow-list
     ?assertMatch({error, bad_scheme},
                  emquest_safeurl:check(<<"file:///x">>, [<<"127.0.0.1">>])).
+
+%% --- anti-DNS-rebinding IP pinning ---
+
+pin_url_http_with_port_test() ->
+    ?assertEqual({"http://93.184.216.34:9201/agent/query?q=1", "example.com:9201"},
+                 emquest_safeurl:pin_url(<<"http://example.com:9201/agent/query?q=1">>,
+                                         {93,184,216,34})).
+
+pin_url_https_default_port_test() ->
+    ?assertEqual({"https://1.2.3.4/x", "example.com"},
+                 emquest_safeurl:pin_url(<<"https://example.com/x">>, {1,2,3,4})).
+
+pin_url_ip_literal_host_test() ->
+    ?assertEqual({"http://93.184.216.34/x", "93.184.216.34"},
+                 emquest_safeurl:pin_url(<<"http://93.184.216.34/x">>, {93,184,216,34})).
+
+%% safe_get on a public IP-literal host must still pin cleanly and not be
+%% classified as blocked/bad-scheme (it fails only at connect time).
+safe_get_public_ip_literal_not_blocked_test() ->
+    inets:start(),
+    R = emquest_safeurl:safe_get(<<"http://93.184.216.34:9/x">>, [], [{timeout, 1000}]),
+    ?assertNotMatch({error, blocked_ip}, R),
+    ?assertNotMatch({error, bad_scheme}, R).
