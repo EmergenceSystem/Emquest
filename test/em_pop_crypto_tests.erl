@@ -49,3 +49,22 @@ canonical_response_v2_parity_fixture_test() ->
     Bytes = em_pop_crypto:canonical_response_v2(<<"québec"/utf8>>, 1700000000000, Items),
     ?assertEqual([113,117,195,169,98,101,99,0,49,55,48,48,48,48,48,48,48,48,48,48,48,0,117,0,116,0,114,10],
                  binary_to_list(Bytes)).
+
+canonical_gossip_auth_bytes_test() ->
+    BodyHash = crypto:hash(sha256, <<"{}">>),
+    Expect = <<"id0", 0, "1700000000000", 0, BodyHash/binary>>,
+    ?assertEqual(Expect, em_pop_crypto:canonical_gossip_auth(<<"id0">>, 1700000000000, BodyHash)).
+
+canonical_gossip_auth_parity_fixture_test() ->
+    Bytes = em_pop_crypto:canonical_gossip_auth(<<"québec"/utf8>>, 1700000000000,
+                                                crypto:hash(sha256, <<"{}">>)),
+    ?assertEqual([113,117,195,169,98,101,99,0,49,55,48,48,48,48,48,48,48,48,48,48,48,0,68,19,111,163,85,179,103,138,17,70,173,22,247,232,100,158,148,251,79,194,31,231,126,131,16,192,96,246,28,170,255,138],
+                 binary_to_list(Bytes)).
+
+emquest_keypair_load_or_create_test() ->
+    Dir = "/tmp/emquest_key_test_" ++ integer_to_list(erlang:unique_integer([positive])),
+    {Pub, _Priv} = em_pop_crypto:load_or_create(Dir),
+    ?assertEqual(16, byte_size(em_pop_crypto:id_of(Pub))),
+    ?assertEqual(Pub, em_pop_crypto:pubkey()),
+    {Pub2, _} = em_pop_crypto:load_or_create(Dir),
+    ?assertEqual(Pub, Pub2).

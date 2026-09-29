@@ -10,8 +10,11 @@
 -module(em_pop_crypto).
 -export([keypair/0, id_of/1, sign/2, verify/3,
          canonical_identity/1, verify_selfsig/1, canonical_response/1,
-         canonical_response_v2/3,
+         canonical_response_v2/3, canonical_gossip_auth/3,
+         load_or_create/1, pubkey/0, privkey/0, node_id/0,
          canonical_ban/2, canonical_unban/2]).
+
+-define(PT_KEY, {em_pop_crypto, keypair}).
 
 -spec keypair() -> {binary(), binary()}.
 keypair() ->
@@ -20,6 +23,31 @@ keypair() ->
 
 -spec id_of(binary()) -> binary().
 id_of(Pub) -> binary:part(crypto:hash(sha256, Pub), 0, 16).
+
+%% @doc Load the node's ed25519 keypair from <Dir>/node_ed25519.key, generating it
+%% if absent. Caches it in persistent_term for pubkey/0,privkey/0.
+-spec load_or_create(file:filename()) -> {binary(), binary()}.
+load_or_create(Dir) ->
+    File = filename:join(Dir, "node_ed25519.key"),
+    KP = case file:read_file(File) of
+             {ok, <<Pub:32/binary, Priv:32/binary>>} -> {Pub, Priv};
+             _ ->
+                 {Pub0, Priv0} = keypair(),
+                 ok = filelib:ensure_dir(File),
+                 ok = file:write_file(File, <<Pub0/binary, Priv0/binary>>),
+                 {Pub0, Priv0}
+         end,
+    persistent_term:put(?PT_KEY, KP),
+    KP.
+
+-spec pubkey() -> binary() | undefined.
+pubkey() -> case persistent_term:get(?PT_KEY, undefined) of {Pub,_} -> Pub; _ -> undefined end.
+
+-spec privkey() -> binary() | undefined.
+privkey() -> case persistent_term:get(?PT_KEY, undefined) of {_,Priv} -> Priv; _ -> undefined end.
+
+-spec node_id() -> binary() | undefined.
+node_id() -> case pubkey() of undefined -> undefined; Pub -> id_of(Pub) end.
 
 -spec sign(binary(), binary()) -> binary().
 sign(Msg, Priv) -> crypto:sign(eddsa, none, Msg, [Priv, ed25519]).
@@ -67,6 +95,11 @@ canonical_response_v2(Query, Ts, Items) when is_integer(Ts), is_list(Items) ->
     iolist_to_binary([to_bin(Query), 0, integer_to_binary(Ts), 0,
                       canonical_response(Items)]);
 canonical_response_v2(_, _, _) -> <<>>.
+
+-spec canonical_gossip_auth(binary(), integer(), binary()) -> binary().
+canonical_gossip_auth(Id, Ts, BodyHash) when is_integer(Ts), is_binary(BodyHash) ->
+    iolist_to_binary([to_bin(Id), 0, integer_to_binary(Ts), 0, BodyHash]);
+canonical_gossip_auth(_, _, _) -> <<>>.
 
 item_line(I) when is_map(I) ->
     P = case maps:get(<<"properties">>, I, undefined) of
