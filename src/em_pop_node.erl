@@ -51,6 +51,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/1]).
+-export([sig_headers/1]).
 -export([get_id/1, get_vector/1, add_peer/3, get_peers/1,
          peers_for/3, get_trust/2, gossip_tick/1, handle_gossip/2,
          ban/3, unban/2, is_banned/2, set_trust/3]).
@@ -1050,10 +1051,7 @@ gossip_url(Host, Port) ->
 -spec http_post(string(), map()) -> {ok, map()} | {error, term()}.
 http_post(Url, Payload) ->
     Body = iolist_to_binary(json:encode(Payload)),
-    Hdrs = case application:get_env(em_filter, auth_token, undefined) of
-               undefined -> [];
-               Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
-           end,
+    Hdrs = sig_headers(Body) ++ bearer_headers(),
     Req  = {Url, Hdrs, "application/json", Body},
     Opts = [{timeout, ?GOSSIP_HTTP_TIMEOUT}],
     case httpc:request(post, Req, Opts, [{body_format, binary}]) of
@@ -1065,6 +1063,29 @@ http_post(Url, Payload) ->
             {error, {http_error, Code}};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+bearer_headers() ->
+    case application:get_env(em_filter, auth_token, undefined) of
+        undefined -> [];
+        Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
+    end.
+
+%% @doc Sign the gossip request body with the node key (empty when no key
+%% is loaded -- the ingress then falls back to the bearer while signed
+%% gossip is optional). Exported for unit testing.
+-spec sig_headers(binary()) -> [{string(), string()}].
+sig_headers(Body) ->
+    case {em_pop_crypto:pubkey(), em_pop_crypto:privkey()} of
+        {Pub, Priv} when is_binary(Pub), is_binary(Priv) ->
+            Id  = em_pop_crypto:id_of(Pub),
+            Ts  = erlang:system_time(millisecond),
+            Sig = em_pop_crypto:sign(
+                    em_pop_crypto:canonical_gossip_auth(Id, Ts, crypto:hash(sha256, Body)), Priv),
+            [{"x-pop-id",  binary_to_list(base64:encode(Id))},
+             {"x-pop-ts",  integer_to_list(Ts)},
+             {"x-pop-sig", binary_to_list(base64:encode(Sig))}];
+        _ -> []
     end.
 
 %%====================================================================
