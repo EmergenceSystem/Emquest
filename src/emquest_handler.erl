@@ -50,7 +50,7 @@
 -export([init/2, fetch_from_agent/3, fetch_from_disco/2, normalise_item/1,
          security_headers/1, internal_exposed/0,
          client_ip/1, response_ok/3, fetch_via_relay/3, cap_items/1]).
--export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
+-export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1, hub_query_allowed/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
 -define(TRUST_INIT, 0.10).
@@ -961,7 +961,10 @@ dispatch_pop_worker(Q, PeerMap) ->
                     Tag = iolist_to_binary([Q, " @relay ", H]),
                     case find_relay_hub(RelayViaId) of
                         Hub when is_map(Hub), is_binary(Id) ->
-                            {Tag, fetch_via_relay(Id, Hub, Q)};
+                            case hub_query_allowed(Hub) of
+                                true  -> {Tag, fetch_via_relay(Id, Hub, Q)};
+                                false -> {Tag, {error, relay_hub_untrusted}}
+                            end;
                         _ ->
                             {Tag, {error, relay_hub_unknown}}
                     end;
@@ -1120,6 +1123,36 @@ trust_tier(_) -> <<"normal">>.
 is_root_pubkey(undefined) -> false;
 is_root_pubkey(PkB64) ->
     lists:member(PkB64, application:get_env(emquest, root_pubkeys, [])).
+
+%% @doc Whether Emquest may route a user query THROUGH this relay hub. A relay
+%% hub sees the plaintext query it forwards, so by default only operator (root)
+%% hubs are trusted with user queries. Config `relay_query_hubs': `root'
+%% (default) = pubkey in root_pubkeys; `all' = any hub; a list of base64 hub ids
+%% = an operator allowlist.
+-spec hub_query_allowed(map()) -> boolean().
+hub_query_allowed(HubMap) ->
+    case application:get_env(emquest, relay_query_hubs, root) of
+        all  -> true;
+        root -> is_root_hub(HubMap);
+        List when is_list(List) ->
+            Id = maps:get(id, HubMap, undefined),
+            is_binary(Id) andalso lists:member(Id, [safe_b64(B) || B <- List]);
+        _ -> is_root_hub(HubMap)
+    end.
+
+%% @private A hub is a root hub when its raw pubkey matches a configured
+%% (base64) root pubkey.
+is_root_hub(HubMap) ->
+    case maps:get(pubkey, HubMap, undefined) of
+        Pk when is_binary(Pk) ->
+            Roots = [safe_b64(B) || B <- application:get_env(emquest, root_pubkeys, [])],
+            lists:member(Pk, Roots);
+        _ -> false
+    end.
+
+%% @private Lenient base64 decode for config entries; garbage maps to `<<>>'.
+safe_b64(B) ->
+    case catch base64:decode(B) of D when is_binary(D) -> D; _ -> <<>> end.
 
 %% @private Gated POST action (ban/unban/trust). Body: {"id":"<base64 id>", ...}.
 %% For `trust' also `"trust":Float'.

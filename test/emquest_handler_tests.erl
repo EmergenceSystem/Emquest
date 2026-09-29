@@ -215,3 +215,31 @@ response_ok_v2_drops_stale_ts_test() ->
     Res = emquest_handler:response_ok(<<"q">>, Resp, Items),
     unbind_pubkey(Dir),
     ?assertNot(Res).
+
+relay_gate_root_allowed_test() ->
+    Root = crypto:strong_rand_bytes(32),
+    application:set_env(emquest, root_pubkeys, [base64:encode(Root)]),
+    application:set_env(emquest, relay_query_hubs, root),
+    Hub = #{id => crypto:strong_rand_bytes(16), pubkey => Root},
+    ?assert(emquest_handler:hub_query_allowed(Hub)).
+
+relay_gate_nonroot_blocked_default_test() ->
+    application:set_env(emquest, root_pubkeys, [base64:encode(crypto:strong_rand_bytes(32))]),
+    application:set_env(emquest, relay_query_hubs, root),
+    Hub = #{id => crypto:strong_rand_bytes(16), pubkey => crypto:strong_rand_bytes(32)},
+    ?assertNot(emquest_handler:hub_query_allowed(Hub)).
+
+relay_gate_all_allows_any_test() ->
+    application:set_env(emquest, relay_query_hubs, all),
+    Hub = #{id => crypto:strong_rand_bytes(16), pubkey => crypto:strong_rand_bytes(32)},
+    ?assert(emquest_handler:hub_query_allowed(Hub)),
+    application:set_env(emquest, relay_query_hubs, root).
+
+relay_gate_allowlist_test() ->
+    HubId = crypto:strong_rand_bytes(16),
+    application:set_env(emquest, relay_query_hubs, [base64:encode(HubId)]),
+    Hub = #{id => HubId, pubkey => crypto:strong_rand_bytes(32)},
+    ?assert(emquest_handler:hub_query_allowed(Hub)),
+    Other = #{id => crypto:strong_rand_bytes(16), pubkey => crypto:strong_rand_bytes(32)},
+    ?assertNot(emquest_handler:hub_query_allowed(Other)),
+    application:set_env(emquest, relay_query_hubs, root).
