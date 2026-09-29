@@ -144,7 +144,12 @@ Discovery is not authorization — a rogue node can *find* the network but not b
   loopback/metadata hosts, and cannot flood peers (per-source cap).
 - **Query privacy** — a filter receives only the query text, never the
   viewer's IP or identity: Emquest does not forward the client address to
-  filters. Result payloads are also size- and count-capped per filter.
+  filters. Result payloads are also size- and count-capped per filter. A
+  relay hub on a query's path necessarily sees the plaintext query it
+  forwards (as does any filter that answers it); by default Emquest routes
+  relayed queries only through the operator's own (root) hubs, and a
+  third-party hub receives user queries only if the operator opts it in
+  (the `relay_query_hubs` setting).
 - **Report & moderate** — viewers can flag a bad result (each result carries
   its source filter id); flags surface in the operator console for a ban
   decision.
