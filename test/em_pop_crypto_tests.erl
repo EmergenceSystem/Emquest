@@ -40,3 +40,12 @@ verify_selfsig_test() ->
     ?assertNot(em_pop_crypto:verify_selfsig(Ident#{name => <<"evil">>, pubkey => Pub, sig => Sig})),
     %% id must match id_of(pubkey).
     ?assertNot(em_pop_crypto:verify_selfsig(Ident#{id => <<0:128>>, pubkey => Pub, sig => Sig})).
+
+%% Byte-parity fixture: em_filter_src's em_pop_crypto:canonical_response_v2/3
+%% produced exactly these bytes. If this fails, the two copies have drifted and
+%% v2 signatures will no longer verify across nodes.
+canonical_response_v2_parity_fixture_test() ->
+    Items = [#{<<"url">> => <<"u">>, <<"title">> => <<"t">>, <<"resume">> => <<"r">>}],
+    Bytes = em_pop_crypto:canonical_response_v2(<<"québec"/utf8>>, 1700000000000, Items),
+    ?assertEqual([113,117,195,169,98,101,99,0,49,55,48,48,48,48,48,48,48,48,48,48,48,0,117,0,116,0,114,10],
+                 binary_to_list(Bytes)).

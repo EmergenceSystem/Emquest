@@ -10,6 +10,7 @@
 -module(em_pop_crypto).
 -export([keypair/0, id_of/1, sign/2, verify/3,
          canonical_identity/1, verify_selfsig/1, canonical_response/1,
+         canonical_response_v2/3,
          canonical_ban/2, canonical_unban/2]).
 
 -spec keypair() -> {binary(), binary()}.
@@ -56,6 +57,16 @@ to_bin(_) -> <<>>.
 canonical_response(Items) when is_list(Items) ->
     iolist_to_binary([item_line(I) || I <- Items]);
 canonical_response(_) -> <<>>.
+
+%% @doc v2 signing bytes: binds the signature to the query answered and a
+%% signing timestamp (ms), closing cross-query replay. Layout:
+%% Query 0 Ts(decimal) 0 canonical_response(Items). MUST stay byte-identical
+%% across both repos (em_filter_src and Emquest); guarded by a fixture test.
+-spec canonical_response_v2(binary(), integer(), list()) -> binary().
+canonical_response_v2(Query, Ts, Items) when is_integer(Ts), is_list(Items) ->
+    iolist_to_binary([to_bin(Query), 0, integer_to_binary(Ts), 0,
+                      canonical_response(Items)]);
+canonical_response_v2(_, _, _) -> <<>>.
 
 item_line(I) when is_map(I) ->
     P = case maps:get(<<"properties">>, I, undefined) of
