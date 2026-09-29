@@ -1093,7 +1093,7 @@ state_to_payload(#state{id = Id, host = Host, port = Port,
 %% Serialise one #peer{} record for embedding in a payload.
 -spec peer_to_payload(#peer{}) -> map().
 peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
-                      name = Name, vector = V, trust = T,
+                      name = Name, vector = V, trust = _,
                       pubkey = PK, selfsig = Sig, relay_via = RelayVia}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => H,
@@ -1101,7 +1101,6 @@ peer_to_payload(#peer{id = Id, host = H, port = P, query_port = QP,
       <<"query_port">> => case QP of undefined -> null; Q -> Q end,
       <<"name">>       => Name,
       <<"vector">>     => base64:encode(V),
-      <<"trust">>      => T,
       <<"pubkey">>     => case PK  of undefined -> null; _ -> base64:encode(PK)  end,
       <<"sig">>        => case Sig of undefined -> null; _ -> base64:encode(Sig) end,
       <<"relay_via">>  => case RelayVia of undefined -> null; RV -> base64:encode(RV) end}.
