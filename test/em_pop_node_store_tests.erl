@@ -5,7 +5,8 @@ start_node(File) ->
     Vec = <<0,0,0,0>>,
     {ok, Pid} = em_pop_node:start_link(#{port => 0, vector => Vec,
                                          gossip_interval => 0, seeds => [],
-                                         state_file => File}),
+                                         state_file => File,
+                                         node_key_dir => "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))}),
     Pid.
 
 setup() ->
@@ -27,7 +28,8 @@ merge_peers_seeds_trust_from_store_test() ->
     Vec  = <<0,0,128,63>>,
     {ok, Pid} = em_pop_node:start_link(#{port => 0, vector => Vec,
                                          gossip_interval => 0, seeds => [],
-                                         state_file => File}),
+                                         state_file => File,
+                                         node_key_dir => "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))}),
     LeafId = <<9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9>>,
     ok = em_pop_store:put_trust(LeafId, 0.7, 1),
     SelfId = <<1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1>>,

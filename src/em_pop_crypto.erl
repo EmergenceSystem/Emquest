@@ -31,11 +31,16 @@ load_or_create(Dir) ->
     File = filename:join(Dir, "node_ed25519.key"),
     KP = case file:read_file(File) of
              {ok, <<Pub:32/binary, Priv:32/binary>>} -> {Pub, Priv};
-             _ ->
+             {error, enoent} ->
                  {Pub0, Priv0} = keypair(),
                  ok = filelib:ensure_dir(File),
                  ok = file:write_file(File, <<Pub0/binary, Priv0/binary>>),
-                 {Pub0, Priv0}
+                 _  = file:change_mode(File, 8#600),
+                 {Pub0, Priv0};
+             {ok, Other} ->
+                 error({bad_node_key, File, byte_size(Other)});
+             {error, Reason} ->
+                 error({node_key_read_failed, File, Reason})
          end,
     persistent_term:put(?PT_KEY, KP),
     KP.

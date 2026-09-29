@@ -68,3 +68,30 @@ emquest_keypair_load_or_create_test() ->
     ?assertEqual(Pub, em_pop_crypto:pubkey()),
     {Pub2, _} = em_pop_crypto:load_or_create(Dir),
     ?assertEqual(Pub, Pub2).
+
+pin_url_ipv6_with_port_test() ->
+    ?assertEqual({"http://[2606:2800::1]:80/x", "[2606:2800::1]:80"},
+                 emquest_safeurl:pin_url(<<"http://[2606:2800::1]:80/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
+
+pin_url_ipv6_no_port_bracketed_host_header_test() ->
+    ?assertEqual({"https://[2606:2800::1]/x", "[2606:2800::1]"},
+                 emquest_safeurl:pin_url(<<"https://[2606:2800::1]/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
+
+pin_url_ipv6_pin_from_name_test() ->
+    ?assertEqual({"http://[2606:2800::1]/x", "example.com"},
+                 emquest_safeurl:pin_url(<<"http://example.com/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
+
+load_or_create_perms_and_corrupt_test() ->
+    Dir = "/tmp/emq_crypto_lc_" ++ integer_to_list(erlang:unique_integer([positive])),
+    File = filename:join(Dir, "node_ed25519.key"),
+    {Pub, Priv} = em_pop_crypto:load_or_create(Dir),
+    {ok, Info} = file:read_file_info(File),
+    ?assertEqual(8#600, element(8, Info) band 8#777),
+    ?assertEqual({Pub, Priv}, em_pop_crypto:load_or_create(Dir)),
+    ok = file:write_file(File, <<"short">>),
+    ?assertError({bad_node_key, File, 5}, em_pop_crypto:load_or_create(Dir)),
+    ?assertEqual(<<"short">>, element(2, file:read_file(File))),
+    os:cmd("rm -rf " ++ Dir).

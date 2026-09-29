@@ -7,7 +7,8 @@
 
 start_node() ->
     {ok, Pid} = em_pop_node:start_link(#{port => 0, vector => ?VEC,
-                                         gossip_interval => 0, seeds => []}),
+                                         gossip_interval => 0, seeds => [],
+                                         node_key_dir => "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))}),
     Pid.
 
 %% Seed one peer into the node by delivering a gossip payload whose self-

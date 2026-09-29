@@ -14,6 +14,8 @@ init_per_suite(Config) ->
     application:ensure_all_started(cowboy),
     application:ensure_all_started(kvex),
     application:ensure_all_started(inets),
+    %% Keep the suite's nodes out of the prod config/ key dir.
+    application:set_env(emquest, node_key_dir, "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))),
     Config.
 
 end_per_suite(_Config) -> ok.
@@ -51,7 +53,8 @@ peers_for_query_filters_out_no_query_port(_Config) ->
         port            => 19503,
         query_port      => 19504,
         vector          => Vec,
-        gossip_interval => 0
+        gossip_interval => 0,
+        node_key_dir    => "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))
     }),
     %% Manually inject the agent as a peer of our pop node.
     #{node := Node} = sys:get_state(PopPid),

@@ -42,7 +42,8 @@ relay_via_and_query_port_carried_on_reoutput(_Config) ->
     Vec = em_filter_vec:from_capabilities([<<"rss">>]),
     {ok, Pid} = em_pop_node:start_link(#{port            => 19901,
                                           vector          => Vec,
-                                          gossip_interval => 0}),
+                                          gossip_interval => 0,
+                                          node_key_dir    => "/tmp/emq_test_key_" ++ integer_to_list(erlang:unique_integer([positive]))}),
     RemoteId = base64:encode(crypto:strong_rand_bytes(16)),
     {ok, _Payload} = em_pop_node:handle_gossip(Pid, #{
         <<"id">>           => RemoteId,
