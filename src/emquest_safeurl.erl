@@ -162,11 +162,16 @@ pin_apply(Url, nopin, Headers, HttpOpts) ->
     {binary_to_list(Url), Headers, HttpOpts};
 pin_apply(Url, {pin, Host, Ip}, Headers, HttpOpts) ->
     {PinUrl, HostHdr} = pin_url(Url, Ip),
-    Headers1 = [{"host", HostHdr} | lists:keydelete("host", 1, Headers)],
+    Headers1 = [{"host", HostHdr} |
+                [H || {K, _} = H <- Headers, string:lowercase(K) =/= "host"]],
     HttpOpts1 = case scheme_of(Url) of
         <<"https">> ->
             [{ssl, [{server_name_indication, binary_to_list(Host)},
-                    {verify, verify_none}]} | HttpOpts];
+                    {verify, verify_peer},
+                    {cacerts, public_key:cacerts_get()},
+                    {customize_hostname_check,
+                       [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}]}
+             | HttpOpts];
         _ -> HttpOpts
     end,
     {PinUrl, Headers1, HttpOpts1}.
@@ -179,9 +184,14 @@ pin_url(Url, Ip) ->
     Host = maps:get(host, M, <<>>),
     IpS  = inet:ntoa(Ip),
     Pinned = uri_string:recompose(M#{host => list_to_binary(IpS)}),
+    HostL  = host_to_list(Host),
+    HostBr = case lists:member($:, HostL) of
+        true  -> "[" ++ HostL ++ "]";
+        false -> HostL
+    end,
     HostHdr = case maps:get(port, M, undefined) of
-        undefined -> host_to_list(Host);
-        Port      -> host_to_list(Host) ++ ":" ++ integer_to_list(Port)
+        undefined -> HostBr;
+        Port      -> HostBr ++ ":" ++ integer_to_list(Port)
     end,
     {binary_to_list(iolist_to_binary(Pinned)), HostHdr}.
 

@@ -115,3 +115,18 @@ safe_get_public_ip_literal_not_blocked_test() ->
     R = emquest_safeurl:safe_get(<<"http://93.184.216.34:9/x">>, [], [{timeout, 1000}]),
     ?assertNotMatch({error, blocked_ip}, R),
     ?assertNotMatch({error, bad_scheme}, R).
+
+pin_url_ipv6_with_port_test() ->
+    ?assertEqual({"http://[2606:2800::1]:80/x", "[2606:2800::1]:80"},
+                 emquest_safeurl:pin_url(<<"http://[2606:2800::1]:80/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
+
+pin_url_ipv6_no_port_bracketed_host_header_test() ->
+    ?assertEqual({"https://[2606:2800::1]/x", "[2606:2800::1]"},
+                 emquest_safeurl:pin_url(<<"https://[2606:2800::1]/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
+
+pin_url_ipv6_pin_from_name_test() ->
+    ?assertEqual({"http://[2606:2800::1]/x", "example.com"},
+                 emquest_safeurl:pin_url(<<"http://example.com/x">>,
+                                         {9734,10240,0,0,0,0,0,1})).
