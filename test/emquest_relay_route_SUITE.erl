@@ -36,7 +36,7 @@ relay_fetch_verifies(_Config) ->
     Sig = em_pop_crypto:sign(em_pop_crypto:canonical_response(Items), Priv),
     %% Same shape em_disco_relay's HTTP handler round-trips from the
     %% filter's own WS "result" frame (Task 1.3/1.4) -- action/id plus the
-    %% signed results/signer_id/signature that response_ok/2 verifies.
+    %% signed results/signer_id/signature that response_ok/3 verifies.
     RespMap = #{<<"action">> => <<"result">>,
                 <<"results">> => Items,
                 <<"signer_id">> => base64:encode(SignerId),

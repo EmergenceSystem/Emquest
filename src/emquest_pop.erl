@@ -249,10 +249,17 @@ handle_call({set_trust, _, _}, _From, #{node := undefined} = State) ->
 handle_call({set_trust, PeerId, Trust}, _From, #{node := Node} = State) ->
     {reply, em_pop_node:set_trust(Node, PeerId, Trust), State};
 
-handle_call({is_banned, _}, _From, #{node := undefined} = State) ->
+handle_call({is_banned, PeerId}, _From, #{node := Node} = State) when is_pid(Node) ->
+    %% Fail open (false) on any node error: is_banned is on the query ingest
+    %% hot path, and crashing emquest_pop here would also take down
+    %% peers_for/all_peers. Ban enforcement lapses only if the node is down.
+    Reply = case catch em_pop_node:is_banned(Node, PeerId) of
+                true -> true;
+                _    -> false
+            end,
+    {reply, Reply, State};
+handle_call({is_banned, _PeerId}, _From, State) ->
     {reply, false, State};
-handle_call({is_banned, PeerId}, _From, #{node := Node} = State) ->
-    {reply, em_pop_node:is_banned(Node, PeerId), State};
 
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
