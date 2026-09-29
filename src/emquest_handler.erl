@@ -47,9 +47,9 @@
 -module(emquest_handler).
 -behaviour(cowboy_handler).
 
--export([init/2, fetch_from_agent/2, fetch_from_disco/2, normalise_item/1,
+-export([init/2, fetch_from_agent/3, fetch_from_disco/2, normalise_item/1,
          security_headers/1, internal_exposed/0,
-         client_ip/1, response_ok/2, fetch_via_relay/3, cap_items/1]).
+         client_ip/1, response_ok/3, fetch_via_relay/3, cap_items/1]).
 -export([trust_tier/1, peer_admin_json/1, is_root_pubkey/1]).
 
 %% Default trust assigned to em_pop peers that have no recorded trust score.
@@ -693,7 +693,7 @@ fetch_from_disco(Body, Url) ->
 %% Returns `{error, Reason}' on any HTTP error, timeout, or bad JSON.
 %% @end
 %%--------------------------------------------------------------------
--spec fetch_from_agent(binary(), string()) ->
+-spec fetch_from_agent(binary(), binary(), string()) ->
     {ok, [map()]} | {error, term()}.
 agent_query_url(H, 443, BP) ->
     lists:flatten(io_lib:format("https://~s~s/agent/query", [H, BP]));
@@ -706,28 +706,29 @@ em_auth_headers() ->
         Tok -> [{"authorization", "Bearer " ++ binary_to_list(Tok)}]
     end.
 
-fetch_from_agent(Body, Url) ->
+fetch_from_agent(Query, Body, Url) ->
     case emquest_safeurl:safe_post(list_to_binary(Url), em_auth_headers(),
                                    "application/json", Body, [{timeout, 8000}]) of
-        {ok, RespBody} -> parse_agent_response(RespBody);
+        {ok, RespBody} -> parse_agent_response(Query, RespBody);
         {error, R} -> {error, R}
     end.
 
 %% @doc Decode a filter/relay JSON response body of the shape
 %% `{"results": [...], "signer_id": .., "signature": ..}' and verify its
-%% signature via `response_ok/2'. Shared by the direct-agent fetch
-%% (`fetch_from_agent/2') and the relay fetch (`fetch_via_relay/3') — the
+%% signature via `response_ok/3', binding it to `Query' (the sub-query
+%% Emquest sent). Shared by the direct-agent fetch
+%% (`fetch_from_agent/3') and the relay fetch (`fetch_via_relay/3') — the
 %% em_disco `/relay/query' endpoint round-trips the filter's own signed
 %% result frame unchanged, so both paths see an identical body shape.
--spec parse_agent_response(binary()) -> {ok, [map()]} | {error, term()}.
-parse_agent_response(RespBody) ->
+-spec parse_agent_response(binary(), binary()) -> {ok, [map()]} | {error, term()}.
+parse_agent_response(Query, RespBody) ->
     try
         #{<<"results">> := Items0} = RespMap = json:decode(RespBody),
         Items = case is_list(Items0) of
             true  -> Items0;
             false -> []
         end,
-        case response_ok(RespMap, Items) of
+        case response_ok(Query, RespMap, Items) of
             true  -> {ok, cap_items(Items)};
             false -> {error, bad_signature}
         end
@@ -766,7 +767,7 @@ find_relay_hub(RelayViaId) when is_binary(RelayViaId) ->
 %% @doc POST a query to `PeerId''s relay hub (`/relay/query') on its
 %% behalf — used when the peer itself exposes no direct `query_port'.
 %% Parses and verifies the response through the same
-%% `parse_agent_response/1' path as a direct agent fetch: the hub
+%% `parse_agent_response/2' path as a direct agent fetch: the hub
 %% round-trips the filter's own signed result frame unchanged, so no
 %% verify logic is duplicated here.
 -spec fetch_via_relay(binary(), map(), term()) -> {ok, [map()]} | {error, term()}.
@@ -778,7 +779,7 @@ fetch_via_relay(PeerId, HubPeerMap, Query) ->
                                            <<"query">>   => Query})),
     case emquest_safeurl:safe_post(list_to_binary(Url), em_auth_headers(),
                                    "application/json", Body, [{timeout, 8000}]) of
-        {ok, RespBody} -> parse_agent_response(RespBody);
+        {ok, RespBody} -> parse_agent_response(Query, RespBody);
         {error, R} -> {error, R}
     end.
 
@@ -788,13 +789,75 @@ fetch_via_relay(PeerId, HubPeerMap, Query) ->
 require_signatures() ->
     application:get_env(emquest, require_signatures, false) =:= true.
 
-%% @doc Verify a filter response's signature (if present) against the signer's
-%% bound pubkey. Returns true = keep, false = drop.
+%% @doc Whether a v2-capable check must reject unsigned/unverifiable v2
+%% responses. Default false (rollout phase).
+-spec require_signatures_v2() -> boolean().
+require_signatures_v2() ->
+    application:get_env(emquest, require_signatures_v2, false) =:= true.
+
+%% @doc Verify a filter response. Banned signers are dropped. A response
+%% carrying an integer `ts' is v2: its signature must cover the sub-query
+%% Emquest sent + the ts (kills cross-query replay) and ts must be fresh.
+%% A response without `ts' is v1 (signature over the items only) and is
+%% handled exactly as before until `require_signatures_v2' is flipped.
+%% Returns true = keep, false = drop.
+-spec response_ok(binary(), map(), list()) -> boolean().
+response_ok(Query, RespMap, Items) ->
+    case banned_signer(maps:get(<<"signer_id">>, RespMap, undefined)) of
+        true  -> false;
+        false ->
+            case maps:get(<<"ts">>, RespMap, undefined) of
+                Ts when is_integer(Ts) -> verify_v2(Query, Ts, RespMap, Items);
+                _                       -> verify_v1(RespMap, Items)
+            end
+    end.
+
+verify_v2(Query, Ts, RespMap, Items) ->
+    case {maps:get(<<"signature">>, RespMap, undefined),
+          maps:get(<<"signer_id">>, RespMap, undefined)} of
+        {SigB64, SidB64} when is_binary(SigB64), is_binary(SidB64) ->
+            fresh_ts(Ts) andalso
+            case {pubkey_for(SidB64), decode_b64(SigB64)} of
+                {Pub, SigBin} when is_binary(Pub), is_binary(SigBin) ->
+                    em_pop_crypto:verify(
+                        em_pop_crypto:canonical_response_v2(Query, Ts, Items),
+                        SigBin, Pub);
+                _ -> not require_signatures_v2()
+            end;
+        _ -> not require_signatures_v2()
+    end.
+
+fresh_ts(Ts) ->
+    Now  = erlang:system_time(millisecond),
+    Max  = application:get_env(emquest, filter_response_max_age_ms, 120000),
+    Skew = application:get_env(emquest, filter_response_future_skew_ms, 30000),
+    (Ts =< Now + Skew) andalso (Ts >= Now - Max).
+
+%% @private Resolve a base64 signer_id to its TOFU-bound raw pubkey.
+-spec pubkey_for(binary()) -> binary() | undefined.
+pubkey_for(SidB64) ->
+    case decode_b64(SidB64) of
+        Id when is_binary(Id) ->
+            case catch em_pop_store:get_pubkey(Id) of
+                Pub when is_binary(Pub) -> Pub;
+                _ -> undefined
+            end;
+        _ -> undefined
+    end.
+
+%% @private True when the (base64) signer_id is banned.
+banned_signer(B) when is_binary(B) ->
+    case decode_b64(B) of
+        Raw when is_binary(Raw) -> emquest_pop:is_banned(Raw);
+        _ -> false
+    end;
+banned_signer(_) -> false.
+
+%% @doc v1 verification (no ts): signature over the items only.
 %% - signature + signer_id present, pubkey bound, sig valid   -> true
-%% - signature present but invalid / signer unknown           -> false (drop)
-%% - no signature: require_signatures() ? false : true
--spec response_ok(map(), list()) -> boolean().
-response_ok(RespMap, Items) ->
+%% - signature present but invalid                            -> false (drop)
+%% - signer unknown / malformed fields / no signature         -> not require_signatures()
+verify_v1(RespMap, Items) ->
     case {maps:get(<<"signature">>, RespMap, undefined),
           maps:get(<<"signer_id">>, RespMap, undefined)} of
         {Sig, SignerId} when is_binary(Sig), is_binary(SignerId) ->
@@ -821,7 +884,7 @@ response_ok(RespMap, Items) ->
         _ -> not require_signatures()
     end.
 
-%% Only ever called with binaries (see response_ok/2's guards).
+%% Only ever called with binaries (see verify_v1/2's guards).
 decode_b64(B) when is_binary(B) ->
     case catch base64:decode(B) of D when is_binary(D) -> D; _ -> error end.
 
@@ -891,7 +954,7 @@ dispatch_pop_worker(Q, PeerMap) ->
             Url  = lists:flatten(agent_query_url(H, QP, BP)),
             Body = iolist_to_binary(json:encode(#{<<"query">> => Q})),
             Tag  = iolist_to_binary([Q, " @pop ", H, ":", integer_to_list(QP)]),
-            {Tag, fetch_from_agent(Body, Url)};
+            {Tag, fetch_from_agent(Q, Body, Url)};
         _NoDirectPort ->
             case decode_relay_via(maps:get(relay_via, PeerMap, undefined)) of
                 RelayViaId when is_binary(RelayViaId) ->

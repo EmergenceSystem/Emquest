@@ -18,7 +18,7 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) -> ok.
 
-%% fetch_from_agent/2 parses a {"results": [...]} response correctly.
+%% fetch_from_agent/3 parses a {"results": [...]} response correctly.
 fetch_from_agent_returns_items(_Config) ->
     Dispatch = cowboy_router:compile([
         {'_', [{"/agent/query", mock_agent_handler,
@@ -28,7 +28,7 @@ fetch_from_agent_returns_items(_Config) ->
                                   [{port, 19600}],
                                   #{env => #{dispatch => Dispatch}}),
     Body = iolist_to_binary(json:encode(#{<<"query">> => <<"test">>})),
-    {ok, Items} = emquest_handler:fetch_from_agent(
+    {ok, Items} = emquest_handler:fetch_from_agent(<<"test">>,
                       Body, "http://localhost:19600/agent/query"),
     true = is_list(Items),
     true = length(Items) > 0,
@@ -38,7 +38,7 @@ fetch_from_agent_returns_items(_Config) ->
 %% An unreachable agent returns {error, _}.
 fetch_from_agent_bad_response_returns_error(_Config) ->
     Body = iolist_to_binary(json:encode(#{<<"query">> => <<"test">>})),
-    {error, _} = emquest_handler:fetch_from_agent(
+    {error, _} = emquest_handler:fetch_from_agent(<<"test">>,
                      Body, "http://localhost:1/agent/query"),
     ok.
 

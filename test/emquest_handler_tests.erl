@@ -109,19 +109,19 @@ response_ok_accepts_valid_signature_test() ->
     RespMap = #{<<"results">> => Items,
                 <<"signer_id">> => base64:encode(Id),
                 <<"signature">> => base64:encode(Sig)},
-    ?assert(emquest_handler:response_ok(RespMap, Items)),
+    ?assert(emquest_handler:response_ok(<<"q">>, RespMap, Items)),
     %% tampered items -> reject
     Tampered = [#{<<"url">> => <<"EVIL">>, <<"title">> => <<"t">>, <<"resume">> => <<"r">>}],
-    ?assertNot(emquest_handler:response_ok(RespMap, Tampered)),
+    ?assertNot(emquest_handler:response_ok(<<"q">>, RespMap, Tampered)),
     em_pop_store:close(), file:delete(Dir ++ "/s.dets").
 
 response_ok_unsigned_tolerated_by_default_test() ->
     application:unset_env(emquest, require_signatures),
-    ?assert(emquest_handler:response_ok(#{<<"results">> => []}, [])).
+    ?assert(emquest_handler:response_ok(<<"q">>, #{<<"results">> => []}, [])).
 
 response_ok_unsigned_rejected_when_required_test() ->
     application:set_env(emquest, require_signatures, true),
-    ?assertNot(emquest_handler:response_ok(#{<<"results">> => []}, [])),
+    ?assertNot(emquest_handler:response_ok(<<"q">>, #{<<"results">> => []}, [])),
     application:unset_env(emquest, require_signatures).
 
 %% --- peer-advertised POST targets must be SSRF-guarded (open federation) ---
@@ -131,13 +131,13 @@ response_ok_unsigned_rejected_when_required_test() ->
 fetch_from_agent_blocks_metadata_target_test() ->
     inets:start(),
     ?assertMatch({error, blocked_ip},
-                 emquest_handler:fetch_from_agent(<<"{}">>,
+                 emquest_handler:fetch_from_agent(<<"q">>, <<"{}">>,
                      "http://169.254.169.254:80/agent/query")).
 
 fetch_from_agent_blocks_rfc1918_target_test() ->
     inets:start(),
     ?assertMatch({error, blocked_ip},
-                 emquest_handler:fetch_from_agent(<<"{}">>,
+                 emquest_handler:fetch_from_agent(<<"q">>, <<"{}">>,
                      "http://10.0.0.5:9201/agent/query")).
 
 fetch_from_disco_blocks_metadata_target_test() ->
@@ -154,16 +154,64 @@ response_ok_tolerates_unknown_signer_optional_test() ->
     application:set_env(emquest, require_signatures, false),
     R = #{<<"signature">> => base64:encode(<<0:512>>),
           <<"signer_id">> => base64:encode(<<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16>>)},
-    ?assert(emquest_handler:response_ok(R, [#{<<"url">> => <<"x">>}])).
+    ?assert(emquest_handler:response_ok(<<"q">>, R, [#{<<"url">> => <<"x">>}])).
 
 response_ok_drops_unknown_signer_when_enforced_test() ->
     application:set_env(emquest, require_signatures, true),
     R = #{<<"signature">> => base64:encode(<<0:512>>),
           <<"signer_id">> => base64:encode(<<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16>>)},
-    Res = emquest_handler:response_ok(R, [#{<<"url">> => <<"x">>}]),
+    Res = emquest_handler:response_ok(<<"q">>, R, [#{<<"url">> => <<"x">>}]),
     application:set_env(emquest, require_signatures, false),
     ?assertNot(Res).
 
 response_ok_tolerates_unsigned_optional_test() ->
     application:set_env(emquest, require_signatures, false),
-    ?assert(emquest_handler:response_ok(#{}, [#{<<"url">> => <<"x">>}])).
+    ?assert(emquest_handler:response_ok(<<"q">>, #{}, [#{<<"url">> => <<"x">>}])).
+
+%% --- v2 (query + ts bound) response verification (P0-1) ---
+
+%% Opens a throwaway store and TOFU-binds Pub for Sid via the same
+%% put_pubkey the em_pop_node TOFU path uses.
+bind_pubkey(Sid, Pub) ->
+    catch em_pop_store:close(),
+    Dir = "/tmp/emq_v2_" ++ integer_to_list(erlang:unique_integer([positive])),
+    ok = filelib:ensure_dir(Dir ++ "/x"),
+    {ok, _} = em_pop_store:open(Dir ++ "/s.dets"),
+    ok = em_pop_store:put_pubkey(Sid, Pub),
+    Dir.
+
+unbind_pubkey(Dir) ->
+    em_pop_store:close(), file:delete(Dir ++ "/s.dets").
+
+v2_resp(Query, SignedTs, Items) ->
+    {Pub, Priv} = em_pop_crypto:keypair(),
+    Sig = em_pop_crypto:sign(em_pop_crypto:canonical_response_v2(Query, SignedTs, Items), Priv),
+    Sid = em_pop_crypto:id_of(Pub),
+    Dir = bind_pubkey(Sid, Pub),
+    {Dir, #{<<"results">> => Items, <<"ts">> => SignedTs,
+            <<"signer_id">> => base64:encode(Sid), <<"signature">> => base64:encode(Sig)}}.
+
+response_ok_v2_accepts_fresh_matching_test() ->
+    Items = [#{<<"url">> => <<"u">>, <<"title">> => <<"t">>}],
+    Ts = erlang:system_time(millisecond),
+    {Dir, Resp} = v2_resp(<<"q">>, Ts, Items),
+    Res = emquest_handler:response_ok(<<"q">>, Resp, Items),
+    unbind_pubkey(Dir),
+    ?assert(Res).
+
+response_ok_v2_drops_query_mismatch_test() ->
+    Items = [#{<<"url">> => <<"u">>}],
+    Ts = erlang:system_time(millisecond),
+    %% signed for "other", verified against "q"
+    {Dir, Resp} = v2_resp(<<"other">>, Ts, Items),
+    Res = emquest_handler:response_ok(<<"q">>, Resp, Items),
+    unbind_pubkey(Dir),
+    ?assertNot(Res).
+
+response_ok_v2_drops_stale_ts_test() ->
+    Items = [#{<<"url">> => <<"u">>}],
+    Old = erlang:system_time(millisecond) - 3600000,
+    {Dir, Resp} = v2_resp(<<"q">>, Old, Items),
+    Res = emquest_handler:response_ok(<<"q">>, Resp, Items),
+    unbind_pubkey(Dir),
+    ?assertNot(Res).

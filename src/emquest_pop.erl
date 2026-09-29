@@ -36,7 +36,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0, peers_for_query/2, all_peers/0, all_peers_safe/0]).
--export([ban/2, unban/1, set_trust/2]).
+-export([ban/2, unban/1, set_trust/2, is_banned/1]).
 -export([credit/1, penalize/1]).
 -export([node_opts_for_test/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -118,6 +118,14 @@ unban(PeerId) -> gen_server:call(?MODULE, {unban, PeerId}, 5_000).
 %%--------------------------------------------------------------------
 -spec set_trust(binary(), float()) -> ok | {error, degraded}.
 set_trust(PeerId, Trust) -> gen_server:call(?MODULE, {set_trust, PeerId, Trust}, 5_000).
+
+%% @doc True when `PeerId' is currently banned by the em_pop node (honours
+%% authority-signed un-bans). Never raises: `false' when the node is
+%% degraded / not started / the call times out.
+-spec is_banned(binary()) -> boolean().
+is_banned(PeerId) when is_binary(PeerId) ->
+    (catch gen_server:call(?MODULE, {is_banned, PeerId}, 5_000)) =:= true;
+is_banned(_) -> false.
 
 %%--------------------------------------------------------------------
 %% @doc Asynchronously raise PeerId's trust after a good query response.
@@ -240,6 +248,11 @@ handle_call({set_trust, _, _}, _From, #{node := undefined} = State) ->
     {reply, {error, degraded}, State};
 handle_call({set_trust, PeerId, Trust}, _From, #{node := Node} = State) ->
     {reply, em_pop_node:set_trust(Node, PeerId, Trust), State};
+
+handle_call({is_banned, _}, _From, #{node := undefined} = State) ->
+    {reply, false, State};
+handle_call({is_banned, PeerId}, _From, #{node := Node} = State) ->
+    {reply, em_pop_node:is_banned(Node, PeerId), State};
 
 handle_call(_Req, _From, State) ->
     {reply, {error, unknown_call}, State}.
