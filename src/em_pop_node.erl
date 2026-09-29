@@ -144,7 +144,9 @@
     max_peers_per_source = 0    :: non_neg_integer(),                 %% per-source sybil cap on distinct peers admitted via gossip (0 = disabled)
     root_pubkeys = []           :: [binary()],                        %% pubkeys of root-anchored hubs exempt from the host-guard/sybil-cap
     source_counts = #{}         :: #{binary() => non_neg_integer()},  %% per-source count of distinct peers admitted via gossip
-    ban_authority_pubkeys = []  :: [binary()]                         %% pubkeys authorized to issue bans accepted via gossip (see apply_bans_from/2)
+    ban_authority_pubkeys = []  :: [binary()],                        %% pubkeys authorized to issue bans accepted via gossip (see apply_bans_from/2)
+    self_pubkey = undefined     :: binary() | undefined,              %% this node's own ed25519 pubkey (gossip identity)
+    self_selfsig = undefined    :: binary() | undefined               %% self-signature over {id,name}, advertised in gossip
 }).
 
 %%====================================================================
@@ -293,7 +295,15 @@ init(Opts) ->
     MaxPeersPerSource = maps:get(max_peers_per_source,   Opts, 0),
     RootPubkeys       = maps:get(root_pubkeys,           Opts, []),
     BanAuthPubkeys    = maps:get(ban_authority_pubkeys,  Opts, RootPubkeys),
-    Id      = generate_id(),
+    %% Dedicated gossip identity: load (or create) the node keypair; the node
+    %% id is derived from the pubkey and self-signed so peers can TOFU-bind it.
+    KeyDir  = maps:get(node_key_dir, Opts,
+                       application:get_env(emquest, node_key_dir, "config")),
+    {SelfPub, SelfPriv} = em_pop_crypto:load_or_create(KeyDir),
+    Id      = em_pop_crypto:id_of(SelfPub),
+    SelfSig = em_pop_crypto:sign(
+                em_pop_crypto:canonical_identity(#{id => Id, name => Name}),
+                SelfPriv),
     case os:getenv("EM_POP_AUTH_TOKEN") of
         false -> ok;
         ""    -> ok;
@@ -357,7 +367,9 @@ init(Opts) ->
         max_peers_per_source  = MaxPeersPerSource,
         root_pubkeys          = RootPubkeys,
         source_counts          = #{},
-        ban_authority_pubkeys = BanAuthPubkeys
+        ban_authority_pubkeys = BanAuthPubkeys,
+        self_pubkey           = SelfPub,
+        self_selfsig          = SelfSig
     }}.
 
 %% --- Simple state accessors ---
@@ -1068,13 +1080,17 @@ http_post(Url, Payload) ->
 state_to_payload(#state{id = Id, host = Host, port = Port,
                          query_port = QPort, name = Name,
                          vector = Vec, peers = Peers, banned = Banned,
-                         unbans = Unbans}) ->
+                         unbans = Unbans, self_pubkey = SelfPub,
+                         self_selfsig = SelfSig}) ->
     #{<<"id">>         => base64:encode(Id),
       <<"host">>       => Host,
       <<"port">>       => Port,
       <<"query_port">> => case QPort of undefined -> null; P -> P end,
       <<"name">>       => Name,
       <<"vector">>     => base64:encode(Vec),
+      %% Own ed25519 identity (id = id_of(pubkey)); peers TOFU-bind it.
+      <<"pubkey">>     => case SelfPub of undefined -> null; _ -> base64:encode(SelfPub) end,
+      <<"sig">>        => case SelfSig of undefined -> null; _ -> base64:encode(SelfSig) end,
       %% Include our own peer list so the remote can discover them too.
       <<"peers">>      => [peer_to_payload(P) || P <- maps:values(Peers)],
       %% Re-emit only authority-signed bans (Sig non-empty); legacy/local-only
@@ -1299,11 +1315,6 @@ peers_to_maps(Peers) ->
 %%====================================================================
 %% Internal — utilities
 %%====================================================================
-
-%% Generate a cryptographically random 16-byte node identifier.
--spec generate_id() -> binary().
-generate_id() ->
-    crypto:strong_rand_bytes(16).
 
 %% Return the first 4 bytes of a node ID as a lowercase hex string.
 %% Used in log messages to keep IDs readable without being too long.

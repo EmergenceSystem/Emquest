@@ -60,3 +60,6 @@ priv/state/
 # STT: large vendored third-party assets — provisioned on the server, not committed
 priv/static/vendor/transformers.js
 priv/static/vendor/ort/
+
+# Node gossip identity private key (never commit)
+/config/node_ed25519.key
